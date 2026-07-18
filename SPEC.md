@@ -174,10 +174,12 @@ processPrompt(prompt):
 
 ## 6. The Tool / Reply Protocol
 
-The Brain expresses its choice as text (**reference protocol**, SHOULD support) or via a
-provider-native tool-call mechanism (**MAY**).
+The Brain expresses its choice as text (**reference protocol**, SHOULD support), as a
+structured tool-call emitted as text (§6.1, **MAY**), or via a provider-native tool-call
+mechanism (**MAY**).
 
-Reference protocol:
+### 6.0 Reference protocol (text)
+
 - To act: a single line — `ACTION: <toolName>: <input>`
 - To answer: `FINAL: <answer>`
 
@@ -187,6 +189,46 @@ Parsing (MUST):
 - `directionType == "ReturnResponse"` is terminal → `Responded`.
 - `directionType == "Refuse"` is terminal → `Refused`.
 - Any other `directionType` is a tool name, routed by Direction (§4.3).
+
+### 6.1 Structured tool-calls (Full — MAY)
+
+A Full implementation **MAY** additionally accept **structured tool-calls** — the same choice
+expressed as typed data rather than a text line. The structured call is emitted **as text and
+parsed**, so it is portable to any endpoint and requires no provider-native tool API.
+
+**Tool contract.** A tool offered for structured calling declares three things:
+- `name` — the identifier used to route the call.
+- `description` — what the tool does and when to use it.
+- `parameters` — a schema of typed inputs (JSON Schema or equivalent).
+
+**Advertisement.** The offered tools — name, description, parameters — **MUST** be presented to
+the Brain as Data (§7.2): rendered into the system prompt, never assumed. The Brain **MUST NOT**
+be expected to use a tool it was not shown.
+
+**The call.** To act, the Brain emits a single line:
+
+```
+TOOL: { "tool": "<name>", "arguments": { ... } }
+```
+
+- The object **MUST** carry a string `tool` and an object `arguments`.
+- `arguments` **SHOULD** conform to the tool's advertised `parameters`.
+- To answer, `FINAL: <answer>` — unchanged.
+
+**Parsing (MUST).**
+- The tool call **MUST** be read from the **first line only**, as in §6.0.
+- An implementation supporting both forms **MUST** accept `ACTION: <tool>: <input>` (§6.0) and
+  `TOOL: { … }` interchangeably.
+- A malformed `TOOL:` line (unparseable JSON, missing `tool`) **MUST NOT** end the loop as a
+  fault; it is a non-terminal turn the agent recovers from (§5), exactly as a nameless
+  `ACTION:` is treated as an answer.
+
+**Direction.** The routed tool receives the structured `arguments`; a tool that consumes a single
+string **MAY** receive the raw `arguments` JSON. Where a sub-agent is the tool, its handoff
+(Data) wraps the arguments into the sub-agent's prompt.
+
+Structured tool-calls are **additive**: the text reference protocol remains the Core contract
+(§8.1), and Core conformance is unaffected.
 
 ---
 
@@ -230,6 +272,8 @@ Parsing (MUST):
 - `MemoryService`, `KnowledgeService` backed by real stores.
 - `GateService` and `JudgeService` as **real guardians, distinct from the Brain**.
 - `ExternalToolService` (MCP / remote).
+- **Structured tool-calls (§6.1):** tools carry `description` + `parameters`, advertised to the
+  Brain, which **MAY** emit typed `TOOL:` calls.
 - Invariants 5–7 (guardian & safety).
 
 ---
@@ -260,6 +304,8 @@ Parsing (MUST):
 - [ ] Reply protocol: first-line ACTION, terminal ReturnResponse / Refuse (§6)
 - [ ] **Full:** guardians (Gate/Judge) distinct from the Brain (§7.6)
 - [ ] **Full:** irreversible actions authorized before execution (§7.7)
+- [ ] **Full:** structured tool-calls — tools advertise name/description/parameters; `TOOL:`
+      calls parsed from the first line; malformed calls recover, not crash (§6.1)
 
 ---
 

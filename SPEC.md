@@ -202,8 +202,20 @@ parsed**, so it is portable to any endpoint and requires no provider-native tool
 - `parameters` — a schema of typed inputs (JSON Schema or equivalent).
 
 **Advertisement.** The offered tools — name, description, parameters — **MUST** be presented to
-the Brain as Data (§7.2): rendered into the system prompt, never assumed. The Brain **MUST NOT**
-be expected to use a tool it was not shown.
+the Brain as Data (§7.2): rendered into the developer's Data at a location the developer controls,
+never force-injected. The Brain **MUST NOT** be expected to use a tool it was not shown.
+
+Advertisement is **under the developer's control**, because which tools a Brain may reach for is a
+safety boundary, not a convenience:
+- A tool is advertised only if it carries a **description** — the description is the opt-in. A tool
+  with no description is **callable but not advertised**: still reachable if the Brain names it, but
+  the implementation does not offer it.
+- The developer controls *whether*, *where*, and with *what framing* the catalog appears. An
+  implementation **MUST NOT** inject the catalog unbidden. The reference implementation expands a
+  `{{tools}}` marker in Data into the catalog of described tools; absent the marker, nothing is
+  advertised.
+- The catalog itself is **derived from the tools** (name/description/parameters), so it cannot drift
+  from what is actually registered.
 
 **The call.** To act, the Brain emits a single line:
 

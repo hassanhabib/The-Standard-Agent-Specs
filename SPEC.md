@@ -102,6 +102,12 @@ interface McpBroker        { call(name: Text, input: Text) -> Async<Text> }
 interface LogBroker        { reset() -> Async<Void>;  write(line: Text) -> Async<Void> }   // support broker
 ```
 
+A broker's *resource* is an implementation choice, not part of the contract. The same
+`KnowledgeBroker` may be backed by a folder of files, a relational database, a key-value cache, or a
+vector store; the same `GeneratorBroker` may wrap a remote endpoint or an in-process model. Swapping
+the resource behind a broker **MUST NOT** require any change to the services above it — this is the
+system's primary extension seam, and the reason the interfaces above are the whole contract.
+
 ### 4.2 Foundation Services — one broker each
 
 A foundation wraps one broker, returns **primitives**, and speaks business language.
@@ -303,6 +309,21 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
   brokers with one inference endpoint), provided the contracts and invariants still hold.
 - **Inference:** `GeneratorBroker` **SHOULD** target an OpenAI-compatible
   `POST /v1/chat/completions` endpoint for interoperability, but **MAY** wrap any model.
+- **Data stores are backend-neutral.** `MemoryBroker` and `KnowledgeBroker` define *operations*,
+  not storage. An implementation **MAY** back them with files, a SQL database, a cache, or a
+  document / vector store — the contract is the boundary. Retrieval quality (substring, full-text,
+  semantic) is the broker's concern and **MAY** improve without changing the interface or any
+  service above it.
+- **Store scope is fixed at construction.** A shared store may serve many agents, users, or
+  sessions. Which partition a broker reads and writes — a path, a key, a table — **MUST** be bound
+  when the broker is constructed, so the broker contract stays scope-free. One broker instance
+  serves one scope; multi-tenancy is achieved by constructing one broker per scope, not by widening
+  the interface.
+- **The Decision substrate is location-neutral.** `GeneratorBroker`, `ClassifierBroker`, and
+  `VerifierBroker` each **MAY** run in-process (a local model) or across the network (a remote
+  endpoint), and independently of one another. One model **MAY** back all three; because each is
+  driven by its own Data-supplied rubric, Invariant 6 (no self-certification) still holds — the
+  substrate is shared, the consciences are not.
 
 ---
 
@@ -311,6 +332,9 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - [ ] `AgentContext` and `AgentStatus` as specified (§3)
 - [ ] Loop caps turns; non-terminal results feed back into observations (§5)
 - [ ] Brokers thin — one resource, no flow control, no authored prompts (§4.1, §7.3)
+- [ ] Broker resources swappable behind their contracts — Data stores and the inference substrate
+      MAY be file / DB / cache / local / remote, scope bound at construction, without changing any
+      service above (§4.1, §9)
 - [ ] Prompts / rules / rubrics loaded from Data, never hardcoded (§7.2)
 - [ ] Agent instance stateless across prompts; persistent memory external (§7.4)
 - [ ] Reply protocol: first-line ACTION, terminal ReturnResponse / Refuse (§6)

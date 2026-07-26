@@ -155,6 +155,28 @@ It runs the loop (§5) and **MUST** hold no nature logic beyond sequencing and o
 (logging). An `AgentCoordination` **SHOULD** also satisfy the tool contract (§6) so an
 agent can be nested as a tool of another agent (the fractal).
 
+### 4.5 Guardian Rubric Composition
+
+The `gatePrompt` and `judgePrompt` a guardian receives are **assembled**, not hardcoded,
+from up to three ordered layers:
+
+1. **Constitution** (optional): an ethical constitution, prepended above everything. When
+   absent it contributes nothing.
+2. **Policy**: what the guardian screens or scores. A default policy is built in; a host
+   **MAY** replace it with a consumption skill.
+3. **Contract**: the output protocol the broker parses (the Gate's `allow` / `refuse`
+   line, the Judge's `0.0`-`1.0` number). It is framework-owned.
+
+Rules:
+
+- The layers **MUST** be assembled in the order constitution, policy, contract.
+- The contract **MUST** always be present and **MUST NOT** be replaceable by a supplied
+  policy, so a replacement policy can never break the broker's parsing.
+- The constitution and the consumption policy, when supplied, **MUST** be loaded from Data
+  (§7.2), never hardcoded.
+- Absent a constitution and a consumption policy, a guardian **MUST** behave exactly as it
+  does with its built-in policy and contract.
+
 ---
 
 ## 5. The Loop (normative algorithm)

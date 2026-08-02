@@ -177,6 +177,39 @@ Rules:
 - Absent a constitution and a consumption policy, a guardian **MUST** behave exactly as it
   does with its built-in policy and contract.
 
+### 4.6 Boundary Protections (Full, OPTIONAL capabilities)
+
+Two optional perimeter controls harden where the agent meets an untrusted outside: the Brain
+(which **MAY** be a remote host) and the tools it can drive. Each is off unless configured, each
+is Data-driven, and neither adds a nature. They are enforcement at an existing boundary, not new
+reasoning.
+
+**Redaction at the Brain boundary.** An implementation **MAY** redact sensitive values from the
+text sent to the Brain. When redaction is configured:
+
+- Every configured pattern **MUST** be replaced, in the `systemPrompt` and `userPrompt` alike,
+  with an opaque, reversible placeholder before the `GeneratorBroker` is called.
+- The Brain, and any remote host serving it, **MUST NOT** receive the sensitive value in the clear.
+- The mapping from placeholder to original value **MUST** stay inside the agent and **MUST NOT**
+  cross to the Brain. The Brain's reply **MUST** be rehydrated, each placeholder restored to its
+  original, before the value is returned to the caller or written to Data.
+- The redaction rules (label and pattern) are Data (§7.2) and **MUST NOT** be hardcoded in a broker.
+- Redaction is a confidentiality control at the boundary (Invariant 8). It **MUST NOT** alter the
+  loop, the reply protocol, or any verdict.
+
+**Least-privilege tool allow-list.** An implementation **MAY** restrict which tools may actually
+run to a configured allow-list. When an allow-list is configured:
+
+- The Brain **MAY** still propose any tool. The allow-list constrains execution, not proposal.
+- A proposed tool not on the allow-list **MUST** be denied at Direction (§4.3) before it executes,
+  never partially run and then rolled back (Invariant 7).
+- A denial **MUST** be non-terminal: it is appended to `observations` with `status` `Working`, so
+  the agent can choose a permitted path on the next turn (§5), exactly as it recovers from a
+  malformed call (§6.1).
+- Matching **MUST** be over the tool name and **SHOULD** be case-insensitive. The allow-list is Data.
+- Absent an allow-list, every registered tool is runnable. The control is opt-in and its absence
+  changes nothing.
+
 ---
 
 ## 5. The Loop (normative algorithm)
@@ -314,6 +347,8 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - `ExternalToolService` (MCP / remote).
 - **Structured tool-calls (§6.1):** tools carry `description` + `parameters`, advertised to the
   Brain, which **MAY** emit typed `TOOL:` calls.
+- **Boundary protections (§4.6):** redaction at the Brain boundary and a least-privilege tool
+  allow-list, both OPTIONAL; when either is provided it **MUST** conform to §4.6.
 - Invariants 5–7 (guardian & safety).
 
 ---
@@ -346,6 +381,18 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
   endpoint), and independently of one another. One model **MAY** back all three; because each is
   driven by its own Data-supplied rubric, Invariant 6 (no self-certification) still holds — the
   substrate is shared, the consciences are not.
+- **The guardian substrate is model-optional.** A Gate (`ClassifierBroker`) or Judge
+  (`VerifierBroker`) **MAY** be backed by a deterministic rule (a fixed refuse-on-match screen, or
+  a required-content check) instead of a model. The service contract (§4.2) is unchanged: the loop
+  still calls `screen` / `evaluate` and reads the same verdict. A deterministic guardian trivially
+  satisfies Invariant 6 (it is not the Brain), and is the preferred substrate wherever the rule is
+  stateable, because compliance is then reproducible rather than probabilistic (Invariant 7).
+- **Observability is layered and optional.** The support `LogBroker` (§4.1) records the run. An
+  implementation **MAY** offer a human-readable trace organized as Turn, Step, Process with
+  selectable verbosity (outcomes only; per-nature; or every step), and **MAY** additionally emit a
+  machine-readable audit, one structured record per event, to a separate sink for a SIEM or
+  telemetry pipeline. Observability **MUST** be side-effect-free with respect to the loop: enabling
+  it or changing its verbosity **MUST NOT** change any verdict, route, or result.
 
 ---
 
@@ -364,6 +411,12 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - [ ] **Full:** irreversible actions authorized before execution (§7.7)
 - [ ] **Full:** structured tool-calls — tools advertise name/description/parameters; `TOOL:`
       calls parsed from the first line; malformed calls recover, not crash (§6.1)
+- [ ] **Full (optional):** boundary redaction hides configured values from the Brain and
+      rehydrates the reply; the Brain never sees them in the clear (§4.6)
+- [ ] **Full (optional):** a tool allow-list denies disallowed tools at Direction before
+      execution, non-terminally (§4.6)
+- [ ] **Optional:** a guardian MAY be a deterministic rule; observability MAY add trace verbosity
+      and a machine-readable audit, both side-effect-free (§9)
 
 ---
 

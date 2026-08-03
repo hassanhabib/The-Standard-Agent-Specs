@@ -96,7 +96,7 @@ interface MemoryBroker     { selectMemories() -> Async<List<Text>>;  insertMemor
 interface KnowledgeBroker  { selectKnowledge(query: Text) -> Async<List<Text>> }
 interface ClassifierBroker { classify(systemPrompt: Text, input: Text) -> Async<Text> }
 interface GeneratorBroker  { generate(systemPrompt: Text, userPrompt: Text) -> Async<Text> }
-interface VerifierBroker   { verify(systemPrompt: Text, candidate: Text) -> Async<Number> }   // 0.0–1.0
+interface VerifierBroker   { verify(systemPrompt: Text, candidate: Text) -> Async<Text> }   // a verdict: a 0.0–1.0 score and a short reason
 interface ToolBroker       { has(name: Text) -> Bool;  run(name: Text, input: Text) -> Async<Text> }
 interface McpBroker        { call(name: Text, input: Text) -> Async<Text> }
 interface LogBroker        { reset() -> Async<Void>;  write(line: Text) -> Async<Void> }   // support broker
@@ -118,11 +118,18 @@ interface MemoryService       { recallMemories() -> Async<List<Text>>;  remember
 interface KnowledgeService    { retrieveKnowledge(query: Text) -> Async<List<Text>> }
 interface GateService         { screen(gatePrompt: Text, input: Text) -> Async<Text> }
 interface BrainService        { generate(systemPrompt: Text, userPrompt: Text) -> Async<Text> }
-interface JudgeService        { evaluate(judgePrompt: Text, candidate: Text) -> Async<Number> }
+interface JudgeService        { evaluate(judgePrompt: Text, candidate: Text) -> Async<Judgement> }
 interface InternalToolService { handles(name: Text) -> Bool;  run(name: Text, input: Text) -> Async<Text> }
 interface ExternalToolService { call(name: Text, input: Text) -> Async<Text> }
 interface ReturnService       { return(payload: Text) -> Async<Text> }   // NO broker — the dead end
 ```
+
+`Judgement` is `{ score: Number (0.0–1.0), reason: Text }`. The Judge returns not just a score but a
+short reason, so a rejection is **actionable**: the reason is what the next Brain attempt is told to
+fix (§4.3). The `VerifierBroker` returns the raw verdict as `Text`; `JudgeService` parses it into the
+score and reason and validates the score's range. A `GateService.screen` verdict is likewise `Text` —
+a classification (`accept` / `refuse`, and **MAY** additionally `route`) that a rejection carries a
+reason on, mirroring the Judge.
 
 ### 4.3 Orchestration Services — one per nature
 
@@ -139,8 +146,9 @@ Required behavior:
   from Memory/Knowledge. It refreshes what the agent HAS.
 - **think** — **MUST**: (a) Gate screens the input, (b) Brain generates, (c) interpret the
   reply into `intent`/`directionType`/`payload`/`rawReply`. It **MAY** run Judge on a final
-  answer and loop instead of returning (reflective judgment). It **MUST NOT** author prompt
-  text.
+  answer and loop instead of returning (reflective judgment); when it does and the Judge
+  **rejects**, the Judge's **reason MUST be fed back into `observations`** so the next Brain
+  attempt revises against that feedback rather than blind. It **MUST NOT** author prompt text.
 - **act** — **MUST** route by `directionType`: **Return** (terminal), **Internal** (a local
   tool), or **External** (out across the boundary). A non-terminal result **MUST** be
   appended to `observations`, and its `status` **MUST** be `Working`.
@@ -164,8 +172,8 @@ from up to three ordered layers:
    absent it contributes nothing.
 2. **Policy**: what the guardian screens or scores. A default policy is built in; a host
    **MAY** replace it with a consumption skill.
-3. **Contract**: the output protocol the broker parses (the Gate's `allow` / `refuse`
-   line, the Judge's `0.0`-`1.0` number). It is framework-owned.
+3. **Contract**: the output protocol the broker parses (the Gate's classification line, the
+   Judge's score-and-reason). It is framework-owned.
 
 Rules:
 
@@ -317,7 +325,9 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 5. **A draft is not a commitment.** Where a guardian applies, output **MUST NOT** cross a
    boundary un-vetted.
 6. **No self-certification.** A guardian (Gate/Judge) **MUST NOT** be the Brain. A faculty
-   **MUST NOT** certify its own trustworthiness.
+   **MUST NOT** certify its own trustworthiness. Guardian output that attempts to *answer* or
+   *act* (rather than screen or score) **MUST** be neutralized — treated as a non-authoritative
+   classification, never executed as the Brain's — and **SHOULD** be recorded.
 7. **Irreversible before, not after.** An irreversible action **MUST** be authorized before
    execution by a trusted guardian (deterministic rule and/or human), never after.
 8. **The boundary.** External state **MUST** enter only as Data (via a Direction that reached
@@ -407,7 +417,10 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - [ ] Prompts / rules / rubrics loaded from Data, never hardcoded (§7.2)
 - [ ] Agent instance stateless across prompts; persistent memory external (§7.4)
 - [ ] Reply protocol: first-line ACTION, terminal ReturnResponse / Refuse (§6)
-- [ ] **Full:** guardians (Gate/Judge) distinct from the Brain (§7.6)
+- [ ] **Full:** guardians (Gate/Judge) distinct from the Brain; guardian output that answers or
+      acts is neutralized, not obeyed (§7.6)
+- [ ] **Full:** a rejecting Judge returns a reason, fed back into observations as revision
+      feedback (§4.2, §4.3)
 - [ ] **Full:** irreversible actions authorized before execution (§7.7)
 - [ ] **Full:** structured tool-calls — tools advertise name/description/parameters; `TOOL:`
       calls parsed from the first line; malformed calls recover, not crash (§6.1)

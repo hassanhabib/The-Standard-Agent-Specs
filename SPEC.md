@@ -91,7 +91,7 @@ A broker is a liaison to **exactly one** external resource. A broker:
 - **MUST** expose asynchronous methods.
 
 ```
-interface SkillBroker      { selectSkills() -> Async<Text> }
+interface SkillBroker      { selectSkills() -> Async<List<Skill>> }
 interface MemoryBroker     { selectMemories() -> Async<List<Text>>;  insertMemory(m: Text) -> Async<Void> }
 interface KnowledgeBroker  { selectKnowledge(query: Text) -> Async<List<Text>> }
 interface ClassifierBroker { classify(systemPrompt: Text, input: Text) -> Async<Text> }
@@ -113,7 +113,7 @@ system's primary extension seam, and the reason the interfaces above are the who
 A foundation wraps one broker, returns **primitives**, and speaks business language.
 
 ```
-interface SkillService        { retrieveSkills() -> Async<Text> }
+interface SkillService        { retrieveSkills(route: Text) -> Async<Text>;  retrieveSkillCatalog() -> Async<Text> }
 interface MemoryService       { recallMemories() -> Async<List<Text>>;  remember(m: Text) -> Async<Void> }
 interface KnowledgeService    { retrieveKnowledge(query: Text) -> Async<List<Text>> }
 interface GateService         { screen(gatePrompt: Text, input: Text) -> Async<Text> }
@@ -130,6 +130,21 @@ fix (§4.3). The `VerifierBroker` returns the raw verdict as `Text`; `JudgeServi
 score and reason and validates the score's range. A `GateService.screen` verdict is likewise `Text` —
 a classification (`accept` / `refuse`, and **MAY** additionally `route`) that a rejection carries a
 reason on, mirroring the Judge.
+
+`Skill` is `{ name: Text, description: Text, content: Text }`. A skill source yields **discrete
+skills** — each with an identity, an optional description, and a body — not one pre-composed blob, so
+the service can select and index them. How a broker sources them is an implementation choice (§9): a
+file-backed `SkillBroker` **SHOULD** discover skills recursively (a skill **MAY** live in its own
+subdirectory) and **MAY** read each skill's `name` / `description` from metadata (e.g. frontmatter),
+stripping that metadata from `content`.
+
+`retrieveSkills(route)` composes the applicable skills' bodies into the `systemPrompt`. When `route`
+is non-empty (from the Gate's `route` verdict, §4.3) it selects the matching skill(s) by `name`, so a
+specialist skill is pulled in only when relevant. `retrieveSkillCatalog()` renders the **index** of
+*described* skills — `name` + `description` — the advertisement a skill-index marker expands into,
+exactly as tools are advertised (§6.1). A skill is advertised only if it carries a `description` (the
+opt-in). Index in context + routing = the model reaches for the skill it needs, the same way it
+reaches for a tool.
 
 ### 4.3 Orchestration Services — one per nature
 
@@ -415,6 +430,8 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
       MAY be file / DB / cache / local / remote, scope bound at construction, without changing any
       service above (§4.1, §9)
 - [ ] Prompts / rules / rubrics loaded from Data, never hardcoded (§7.2)
+- [ ] Skills are discrete entries (name / description / content); a file source discovers them
+      recursively; described skills are advertised as an index for model-driven routing (§4.1–§4.2)
 - [ ] Agent instance stateless across prompts; persistent memory external (§7.4)
 - [ ] Reply protocol: first-line ACTION, terminal ReturnResponse / Refuse (§6)
 - [ ] **Full:** guardians (Gate/Judge) distinct from the Brain; guardian output that answers or

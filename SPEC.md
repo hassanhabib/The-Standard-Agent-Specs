@@ -203,6 +203,24 @@ It runs the loop (§5) and **MUST** hold no nature logic beyond sequencing and o
 (logging). An `AgentCoordination` **SHOULD** also satisfy the tool contract (§6) so an
 agent can be nested as a tool of another agent (the fractal).
 
+**Concurrent invocation.** Invariant 4 says an agent instance is stateless across prompts. Its
+direct consequence is that one instance **MUST** be able to serve many prompts at once:
+
+- A single `AgentCoordination` instance **MUST** support concurrent `processPrompt` invocations.
+  Two prompts in flight **MUST NOT** observe or overwrite each other's state, and the result of
+  each **MUST** be identical to running it alone.
+- Each invocation **MUST** establish its own **run identity**, and everything the invocation
+  records — its turns, its steps, its decision-log records (§4.7) — **MUST** be attributed to
+  that run and to no other.
+- Run state is therefore **per invocation, never per instance**. An implementation that keeps a
+  run's identity, counters, or timing in fields shared by the instance is **not** conformant,
+  because a second concurrent prompt silently corrupts the first's record.
+- This is a **statement about state, not about parallelism.** An implementation **MAY** serialize
+  work internally; what it **MUST NOT** do is let one run's bookkeeping leak into another's.
+
+How run identity is carried is an implementation choice (§9) — a parameter, a context field, or
+an ambient per-flow value — provided the guarantee above holds.
+
 ### 4.5 Guardian Rubric Composition
 
 The `gatePrompt` and `judgePrompt` a guardian receives are **assembled**, not hardcoded,
@@ -439,7 +457,9 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
    and **MUST NOT** be authored in Decision, in brokers, or hardcoded.
 3. **Brokers are thin.** A broker **MUST NOT** contain business flow control.
 4. **The agent is ephemeral.** An instance **MUST** be stateless across prompts. Persistent
-   memory **MUST** live outside the agent — recalled by Data, written by Direction.
+   memory **MUST** live outside the agent — recalled by Data, written by Direction. Because it
+   holds no state between prompts, one instance **MUST** also serve prompts *concurrently*
+   without runs observing or overwriting one another (§4.4).
 5. **A draft is not a commitment.** Where a guardian applies, output **MUST NOT** cross a
    boundary un-vetted.
 6. **No self-certification.** A guardian (Gate/Judge) **MUST NOT** be the Brain. A faculty
@@ -543,6 +563,8 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - [ ] Skills are discrete entries (name / description / content); a file source discovers them
       recursively; described skills are advertised as an index for model-driven routing (§4.1–§4.2)
 - [ ] Agent instance stateless across prompts; persistent memory external (§7.4)
+- [ ] One instance serves concurrent prompts; run identity and counters are per invocation, never
+      per instance, so no run corrupts another's record (§4.4, §7.4)
 - [ ] Reply protocol: first-line ACTION, terminal ReturnResponse / Refuse (§6)
 - [ ] **Full:** guardians (Gate/Judge) distinct from the Brain; guardian output that answers or
       acts is neutralized, not obeyed (§7.6)

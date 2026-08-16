@@ -75,6 +75,30 @@ record AgentContext {
   **MUST NOT** mutate a shared instance. (Use records/immutable structs; if unavailable,
   a copy helper or builder.)
 
+### 3.3 AuditRecord (OPTIONAL capability — §4.7)
+
+One structured event in the agent's **decision log**. Present only when a host configures a
+decision log; the type is specified here so that log is portable across implementations.
+
+```
+enum AuditKind { Run, Turn, Step, Process, Outcome, Error }
+
+record AuditRecord {
+  runId        : Text          // identifies exactly one processPrompt invocation
+  sequence     : Number        // monotonic within the run, starting at its first record
+  timestamp    : Text          // the instant, UTC, in a fixed machine-readable format
+  kind         : AuditKind
+  actor        : Text          // which tier or nature produced it
+  message      : Text
+  principal    : Text?         // on whose behalf the run executes; absent when unattributed
+  previousHash : Text?         // tamper-evidence chain (§4.7)
+}
+```
+
+- `runId` **MUST** be unique per invocation and **MUST NOT** be reused across prompts.
+- `sequence` **MUST** be per-run, not global, so a run remains reconstructible from an
+  interleaved sink.
+
 ---
 
 ## 4. Component Contracts
@@ -100,6 +124,7 @@ interface VerifierBroker   { verify(systemPrompt: Text, candidate: Text) -> Asyn
 interface ToolBroker       { has(name: Text) -> Bool;  run(name: Text, input: Text) -> Async<Text> }
 interface McpBroker        { call(name: Text, input: Text) -> Async<Text> }
 interface LogBroker        { reset() -> Async<Void>;  write(line: Text) -> Async<Void> }   // support broker
+interface AuditBroker      { write(record: AuditRecord) -> Async<Void> }                   // support broker, OPTIONAL (§4.7)
 ```
 
 A broker's *resource* is an implementation choice, not part of the contract. The same
@@ -232,6 +257,84 @@ run to a configured allow-list. When an allow-list is configured:
 - Matching **MUST** be over the tool name and **SHOULD** be case-insensitive. The allow-list is Data.
 - Absent an allow-list, every registered tool is runnable. The control is opt-in and its absence
   changes nothing.
+
+### 4.7 The Decision Log (Full, OPTIONAL capability)
+
+The human-readable trace (`LogBroker`, §4.1) exists to be *read by a person during development*.
+A **decision log** is a different artifact with a different reader: it is the machine-readable,
+durable record of what the agent decided and why, written for an incident review, a regulator, or
+a security pipeline. An implementation **MAY** offer one; when it does, the rules below apply,
+because a log that can be silently lost is worse than no log — it invites reliance it cannot bear.
+
+The sink is a broker (`AuditBroker`, §4.1): a file, an append-only store, a telemetry collector, a
+SIEM. Which one is an implementation choice and **MUST** be swappable without changing anything
+above it (§4.1).
+
+**Durability.**
+- The decision log **MUST** be append-only. An implementation **MUST NOT** truncate, clear,
+  overwrite, or otherwise discard previously written records when a new run begins, when the agent
+  is reconfigured, or when the process restarts.
+- Beginning a run **MUST NOT** be a destructive operation on the sink. Where the trace (§4.1)
+  defines `reset()`, that reset applies to the human-readable trace only; it **MUST NOT** propagate
+  to the decision log.
+
+**Attribution and order.**
+- Every record **MUST** carry `runId`, `sequence`, `timestamp`, and `kind` (§3.3).
+- Records from concurrent runs **MAY** interleave in the sink. Each record **MUST** remain
+  attributable to exactly one run, and a reader **MUST** be able to reconstruct any run's records,
+  in order, by selecting on `runId` and ordering by `sequence`.
+- A record **MUST NOT** be written in a form that can be corrupted by a concurrent write to the
+  same sink. Interleaving *between* records is permitted; interleaving *within* a record is not.
+- When a `principal` is configured, it **MUST** be recorded on every record of that run, so the log
+  answers *who* as well as *what*.
+
+**Tamper-evidence.**
+- An implementation **SHOULD** chain records: `previousHash` carries a cryptographic hash of the
+  preceding record's canonical form. Given the chain, a reader **MUST** be able to detect that a
+  record was altered or removed.
+- Tamper-evidence is a detection control, not a prevention control. It does **NOT** replace the
+  sink's own access controls.
+
+**Neutrality.**
+- The decision log **MUST** be side-effect-free with respect to the loop: enabling it, disabling
+  it, changing its sink, or failing to write **MUST NOT** change any verdict, route, or result.
+- Absent configuration, no decision log is emitted, no sink is touched, and behavior is exactly as
+  if this section did not exist.
+
+### 4.8 Capability Access — Local, External, Custom
+
+Every capability is reached through the implementation's **host-facing composition surface** (the
+builder, client, or equivalent — §9). This section is about that surface, and it is normative
+because the reach of a capability is what decides whether the same agent definition survives
+growth: a capability offered only one way forces a rewrite the day the host outgrows it.
+
+For **each** capability it exposes — Skills, Memory, Knowledge, Brain, Gate, Judge, Tools, the
+trace, and any capability the implementation adds — the surface **MUST** offer three modes:
+
+| Mode | Satisfied by | Configured with |
+|---|---|---|
+| **Local** | the implementation's own package | a resource the host already has: a path, a folder, a literal rule |
+| **External** | a provider outside that package | a broker (§4.1), supplied by the host |
+| **Custom** | host-authored code | a function, where authoring a whole broker would be disproportionate |
+
+Rules:
+
+- **Local MUST NOT require an additional dependency**, and **MUST NOT** require a network. It is
+  what makes the first line of an agent work with nothing installed.
+- **External MUST** be reached through the capability's broker contract exactly as §4.1 defines it,
+  and **MUST NOT** require modifying the implementation. This is the seam that lets a provider ship
+  independently.
+- **Custom MUST NOT** require the host to implement more than the capability's own contract; where
+  a single function suffices, a function **MUST** be accepted.
+- The three modes **MUST** be distinguishable by name at the surface, and the naming **SHOULD** be
+  uniform across capabilities, so a host that has learned one capability has learned them all. A
+  mode's name **MUST** describe *where the capability comes from*, never merely how it is passed —
+  in particular, host-authored code is **Custom**, not Local, whatever the transport.
+- Where a mode is genuinely meaningless for a capability, it **MAY** be omitted, and the omission
+  **MUST** be documented with its reason. Silence is not an omission; it is a defect.
+- A capability offered with fewer than three modes, absent such a documented reason, is
+  **incomplete**, and an implementation **SHOULD** be able to detect that mechanically rather than
+  by review.
 
 ---
 
@@ -415,9 +518,16 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - **Observability is layered and optional.** The support `LogBroker` (§4.1) records the run. An
   implementation **MAY** offer a human-readable trace organized as Turn, Step, Process with
   selectable verbosity (outcomes only; per-nature; or every step), and **MAY** additionally emit a
-  machine-readable audit, one structured record per event, to a separate sink for a SIEM or
-  telemetry pipeline. Observability **MUST** be side-effect-free with respect to the loop: enabling
-  it or changing its verbosity **MUST NOT** change any verdict, route, or result.
+  machine-readable **decision log**, one structured record per event, to a separate sink for a SIEM
+  or telemetry pipeline. The two layers are not interchangeable and have different readers: the
+  trace is transient and may be reset; the decision log is durable and **MUST NOT** be
+  (§4.7). Observability **MUST** be side-effect-free with respect to the loop: enabling it or
+  changing its verbosity **MUST NOT** change any verdict, route, or result.
+- **The composition surface is part of the contract.** §4.8 constrains how a host reaches a
+  capability — Local, External, Custom — but not what the surface is called or how it is spelled. A
+  fluent builder, a constructor with options, a configuration object, or a module of factory
+  functions are all conformant, provided every capability is reachable all three ways and the mode
+  names say where a capability comes from.
 
 ---
 
@@ -446,7 +556,15 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - [ ] **Full (optional):** a tool allow-list denies disallowed tools at Direction before
       execution, non-terminally (§4.6)
 - [ ] **Optional:** a guardian MAY be a deterministic rule; observability MAY add trace verbosity
-      and a machine-readable audit, both side-effect-free (§9)
+      and a machine-readable decision log, both side-effect-free (§9)
+- [ ] Every capability reachable Local, External and Custom; mode names say where the capability
+      comes from; any omitted mode documented with its reason (§4.8)
+- [ ] **Full (optional):** the decision log is append-only — beginning a run never discards prior
+      records — and every record carries runId / sequence / timestamp / kind (§3.3, §4.7)
+- [ ] **Full (optional):** concurrent runs stay attributable; a run is reconstructible by runId
+      ordered by sequence; no record is corrupted by a concurrent write (§4.7)
+- [ ] **Full (optional):** the decision log SHOULD be hash-chained so alteration or removal of a
+      record is detectable (§4.7)
 
 ---
 

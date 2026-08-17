@@ -481,6 +481,10 @@ Direction **MUST** apply the following order, and **MUST NOT** reorder it:
    never recorded is indistinguishable from one that never ran.
 3. **Approve, if required** — `ApprovalBroker.request`. `Pending` **MUST** stop the turn with
    `AwaitingApproval` (§3.1) and **MUST NOT** execute. `Denied` is non-terminal, like a denial.
+   An act that was **not** approved **MUST** have its run-once claim released, because a held act
+   is one that still has to be able to happen. An implementation that leaves the claim standing
+   has built an approval that can only ever be granted too late: the authority says yes, the
+   resumed run proposes the act, and the ledger reports it as already done.
 4. **Execute at most once** — see below.
 5. **Record the outcome** — before the loop advances, so a resumed or retried run can find it.
 
@@ -491,6 +495,11 @@ Direction **MUST** apply the following order, and **MUST NOT** reorder it:
   key the model can choose is a key the model can vary, and run-once becomes advisory.
 - On a repeat key the implementation **MUST** return the first outcome and **MUST NOT** call the
   tool again.
+- A claim with no outcome recorded against it means the act is **in flight**, which is
+  deliberately not the same as *never happened*: a run that died between step 4 and step 5 left
+  an effect in the world and no record of what it produced, and reporting that as "never
+  happened" would run it again. It is also not the same as *finished*, so an implementation
+  **MUST** distinguish the two rather than collapsing them.
 - This matters most where it is least visible: retries (§9) and resumption both exist to run
   something *again*, so an implementation offering either **MUST** offer run-once for
   `Irreversible` effects, or it has built two ways to pay a wire transfer twice.

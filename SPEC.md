@@ -120,7 +120,7 @@ interface MemoryBroker     { selectMemories() -> Async<List<Text>>;  insertMemor
 interface KnowledgeBroker  { selectKnowledge(query: Text) -> Async<List<Text>> }
 interface ClassifierBroker { classify(systemPrompt: Text, input: Text) -> Async<Text> }
 interface GeneratorBroker  { generate(systemPrompt: Text, userPrompt: Text) -> Async<Text> }
-interface VerifierBroker   { verify(systemPrompt: Text, candidate: Text) -> Async<Text> }   // a verdict: a 0.0–1.0 score and a short reason
+interface VerifierBroker   { verify(systemPrompt: Text, task: Text, candidate: Text) -> Async<Text> }   // a verdict: a 0.0–1.0 score and a short reason
 interface ToolBroker       { has(name: Text) -> Bool;  run(name: Text, input: Text) -> Async<Text> }
 interface McpBroker        { call(name: Text, input: Text) -> Async<Text> }
 interface LogBroker        { reset() -> Async<Void>;  write(line: Text) -> Async<Void> }   // support broker
@@ -143,7 +143,7 @@ interface MemoryService       { recallMemories() -> Async<List<Text>>;  remember
 interface KnowledgeService    { retrieveKnowledge(query: Text) -> Async<List<Text>> }
 interface GateService         { screen(gatePrompt: Text, input: Text) -> Async<Text> }
 interface BrainService        { generate(systemPrompt: Text, userPrompt: Text) -> Async<Text> }
-interface JudgeService        { evaluate(judgePrompt: Text, candidate: Text) -> Async<Judgement> }
+interface JudgeService        { evaluate(judgePrompt: Text, task: Text, candidate: Text) -> Async<Judgement> }
 interface InternalToolService { handles(name: Text) -> Bool;  run(name: Text, input: Text) -> Async<Text> }
 interface ExternalToolService { call(name: Text, input: Text) -> Async<Text> }
 interface ReturnService       { return(payload: Text) -> Async<Text> }   // NO broker — the dead end
@@ -152,7 +152,16 @@ interface ReturnService       { return(payload: Text) -> Async<Text> }   // NO b
 `Judgement` is `{ score: Number (0.0–1.0), reason: Text }`. The Judge returns not just a score but a
 short reason, so a rejection is **actionable**: the reason is what the next Brain attempt is told to
 fix (§4.3). The `VerifierBroker` returns the raw verdict as `Text`; `JudgeService` parses it into the
-score and reason and validates the score's range. A `GateService.screen` verdict is likewise `Text` —
+score and reason and validates the score's range.
+
+**The Judge MUST receive the task.** An answer is not good or bad on its own — it is good or bad
+*for a question*. Correctness, completeness and relevance are all judgments about the fit between a
+task and an answer, so a Judge given only the candidate is being asked to score a fit it cannot
+see, and its verdict is noise dressed as a number. The task **MUST** therefore be passed to
+`evaluate` alongside the candidate and reach the `VerifierBroker`. This is a **MUST** and not a
+**SHOULD** because the failure is silent: a blind Judge still returns a plausible score, still
+rejects, and still spends a turn of the loop's budget on a revision it could not have reasoned
+about. A `GateService.screen` verdict is likewise `Text` —
 a classification (`accept` / `refuse`, and **MAY** additionally `route`) that a rejection carries a
 reason on, mirroring the Judge.
 
@@ -250,14 +259,20 @@ Two optional perimeter controls harden where the agent meets an untrusted outsid
 is Data-driven, and neither adds a nature. They are enforcement at an existing boundary, not new
 reasoning.
 
-**Redaction at the Brain boundary.** An implementation **MAY** redact sensitive values from the
-text sent to the Brain. When redaction is configured:
+**Redaction at the model boundary.** An implementation **MAY** redact sensitive values from the
+text sent to a model. When redaction is configured:
 
 - Every configured pattern **MUST** be replaced, in the `systemPrompt` and `userPrompt` alike,
   with an opaque, reversible placeholder before the `GeneratorBroker` is called.
-- The Brain, and any remote host serving it, **MUST NOT** receive the sensitive value in the clear.
+- Redaction **MUST** cover **every** model the agent drives, not only the Brain. The Gate
+  (`ClassifierBroker`) screens the raw task and the Judge (`VerifierBroker`) reads the task and the
+  drafted answer, so both see exactly the values redaction exists to hide. A guardian **MAY** run on
+  a different host than the Brain, which makes an unredacted guardian a *wider* exposure than an
+  unredacted Brain, not a narrower one. An implementation that redacts one model call and not the
+  others does not satisfy this section.
+- No model, and no remote host serving one, **MUST** receive the sensitive value in the clear.
 - The mapping from placeholder to original value **MUST** stay inside the agent and **MUST NOT**
-  cross to the Brain. The Brain's reply **MUST** be rehydrated, each placeholder restored to its
+  cross to any model. A model's reply **MUST** be rehydrated, each placeholder restored to its
   original, before the value is returned to the caller or written to Data.
 - The redaction rules (label and pattern) are Data (§7.2) and **MUST NOT** be hardcoded in a broker.
 - Redaction is a confidentiality control at the boundary (Invariant 8). It **MUST NOT** alter the
@@ -465,7 +480,10 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 6. **No self-certification.** A guardian (Gate/Judge) **MUST NOT** be the Brain. A faculty
    **MUST NOT** certify its own trustworthiness. Guardian output that attempts to *answer* or
    *act* (rather than screen or score) **MUST** be neutralized — treated as a non-authoritative
-   classification, never executed as the Brain's — and **SHOULD** be recorded.
+   classification, never executed as the Brain's — and **SHOULD** be recorded. Neutralization
+   **MUST** hold on every path by which a prompt can be processed; an implementation offering
+   both a batched and a streamed loop **MUST** enforce it in both, since a guardian that can
+   answer on one path is a guardian that can answer.
 7. **Irreversible before, not after.** An irreversible action **MUST** be authorized before
    execution by a trusted guardian (deterministic rule and/or human), never after.
 8. **The boundary.** External state **MUST** enter only as Data (via a Direction that reached
@@ -570,11 +588,14 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
       acts is neutralized, not obeyed (§7.6)
 - [ ] **Full:** a rejecting Judge returns a reason, fed back into observations as revision
       feedback (§4.2, §4.3)
+- [ ] **Full:** the Judge receives the task it is scoring against, not the candidate alone (§4.2)
+- [ ] **Full:** guardian overreach is neutralized on every processing path, batched and streamed
+      alike (§7.6)
 - [ ] **Full:** irreversible actions authorized before execution (§7.7)
 - [ ] **Full:** structured tool-calls — tools advertise name/description/parameters; `TOOL:`
       calls parsed from the first line; malformed calls recover, not crash (§6.1)
-- [ ] **Full (optional):** boundary redaction hides configured values from the Brain and
-      rehydrates the reply; the Brain never sees them in the clear (§4.6)
+- [ ] **Full (optional):** boundary redaction hides configured values from **every** model —
+      Brain, Gate and Judge alike — and rehydrates the reply; none sees them in the clear (§4.6)
 - [ ] **Full (optional):** a tool allow-list denies disallowed tools at Direction before
       execution, non-terminally (§4.6)
 - [ ] **Optional:** a guardian MAY be a deterministic rule; observability MAY add trace verbosity

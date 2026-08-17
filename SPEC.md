@@ -45,10 +45,13 @@ class. The names are canonical *roles*; adapt casing to your language.
 ### 3.1 AgentStatus
 
 ```
-enum AgentStatus { Working, Responded, AwaitingInput, Refused, Failed }
+enum AgentStatus { Working, Responded, AwaitingInput, AwaitingApproval, Refused, Failed }
 ```
 
 - `Working` **MUST** be the default / initial value.
+- `AwaitingApproval` is terminal for the turn and means an effect is proposed but not performed
+  (§4.9). It is distinct from `AwaitingInput`: the agent is not asking the user a question, it is
+  asking an authority for permission.
 - The loop (§5) continues while `status == Working` and stops on any other value.
 - Implementations **MUST NOT** replace this with a boolean.
 
@@ -75,7 +78,31 @@ record AgentContext {
   **MUST NOT** mutate a shared instance. (Use records/immutable structs; if unavailable,
   a copy helper or builder.)
 
-### 3.3 AuditRecord (OPTIONAL capability — §4.7)
+### 3.3 AgentEffect (OPTIONAL capability — §4.9)
+
+A proposed act, described. Direction routes a tool call today as a bare name and payload; an
+implementation offering the perimeter controls of §4.9 **MUST** carry them as an effect instead,
+because authorization, approval and run-once are all judgments about *an act*, and an act with no
+identity cannot be judged twice the same way.
+
+```
+enum RiskLevel { Safe, Sensitive, Irreversible }
+
+record AgentEffect {
+  runId               : Text        // the run proposing it (§4.4)
+  principal           : Text?       // on whose behalf, when known
+  toolName            : Text
+  arguments           : Text
+  idempotencyKey      : Text        // derived, not supplied — see §4.9
+  riskLevel           : RiskLevel   // defaults to Safe
+  approvalRequirement : Bool        // defaults to false
+}
+```
+
+- `riskLevel` **MUST** default to `Safe`, so an implementation that adopts effects without
+  classifying its tools behaves exactly as it did before.
+
+### 3.4 AuditRecord (OPTIONAL capability — §4.7)
 
 One structured event in the agent's **decision log**. Present only when a host configures a
 decision log; the type is specified here so that log is portable across implementations.
@@ -125,7 +152,13 @@ interface ToolBroker       { has(name: Text) -> Bool;  run(name: Text, input: Te
 interface McpBroker        { call(name: Text, input: Text) -> Async<Text> }
 interface LogBroker        { reset() -> Async<Void>;  write(line: Text) -> Async<Void> }   // support broker
 interface AuditBroker      { write(record: AuditRecord) -> Async<Void> }                   // support broker, OPTIONAL (§4.7)
+interface PolicyBroker     { authorize(effect: AgentEffect) -> Async<AuthorizationDecision> }  // support broker, OPTIONAL (§4.9)
+interface ApprovalBroker   { request(effect: AgentEffect) -> Async<ApprovalDecision> }         // support broker, OPTIONAL (§4.9)
 ```
+
+`AuthorizationDecision` is `{ permitted: Bool, reason: Text }` and `ApprovalDecision` is
+`enum { Approved, Denied, Pending }`. A decision **MUST** carry its reason: a denial with no
+reason cannot be audited, cannot be appealed, and cannot be told apart from a fault.
 
 A broker's *resource* is an implementation choice, not part of the contract. The same
 `KnowledgeBroker` may be backed by a folder of files, a relational database, a key-value cache, or a
@@ -312,7 +345,7 @@ above it (§4.1).
   to the decision log.
 
 **Attribution and order.**
-- Every record **MUST** carry `runId`, `sequence`, `timestamp`, and `kind` (§3.3).
+- Every record **MUST** carry `runId`, `sequence`, `timestamp`, and `kind` (§3.4).
 - Records from concurrent runs **MAY** interleave in the sink. Each record **MUST** remain
   attributable to exactly one run, and a reader **MUST** be able to reconstruct any run's records,
   in order, by selecting on `runId` and ordering by `sequence`.
@@ -368,6 +401,52 @@ Rules:
 - A capability offered with fewer than three modes, absent such a documented reason, is
   **incomplete**, and an implementation **SHOULD** be able to detect that mechanically rather than
   by review.
+
+### 4.9 The Perimeter (Full, OPTIONAL capabilities)
+
+§4.6 hardens what the agent *sends*. This section hardens what the agent *does* and what it
+*believes*. Each control is off unless configured, each is Data-driven, and none adds a nature —
+Direction already owns the boundary, and these are enforcement at it.
+
+**Effects.** When any control in this section is configured, a proposed tool call **MUST** be
+carried as an `AgentEffect` (§3.3) rather than a bare name and payload, because authorization,
+approval and run-once are all judgments about an act, and an act with no identity cannot be judged
+the same way twice.
+
+Direction **MUST** apply the following order, and **MUST NOT** reorder it:
+
+1. **Authorize** — `PolicyBroker.authorize`. A denial is non-terminal: appended to `observations`
+   with `status` `Working`, so the agent can choose a permitted path, exactly as §4.6 requires of
+   the allow-list. The decision's reason **MUST** be recorded.
+2. **Record the intent** — before the effect runs, never after. An effect that executed but was
+   never recorded is indistinguishable from one that never ran.
+3. **Approve, if required** — `ApprovalBroker.request`. `Pending` **MUST** stop the turn with
+   `AwaitingApproval` (§3.1) and **MUST NOT** execute. `Denied` is non-terminal, like a denial.
+4. **Execute at most once** — see below.
+5. **Record the outcome** — before the loop advances, so a resumed or retried run can find it.
+
+**Run-once.** An effect **MUST NOT** execute more than once for the same `idempotencyKey`.
+
+- The key **MUST** be *derived* from the effect — at minimum the run, the tool name, and a
+  canonical form of the arguments — and **MUST NOT** be supplied by the caller or by the Brain. A
+  key the model can choose is a key the model can vary, and run-once becomes advisory.
+- On a repeat key the implementation **MUST** return the first outcome and **MUST NOT** call the
+  tool again.
+- This matters most where it is least visible: retries (§9) and resumption both exist to run
+  something *again*, so an implementation offering either **MUST** offer run-once for
+  `Irreversible` effects, or it has built two ways to pay a wire transfer twice.
+
+**Untrusted inbound.** Text that entered as Data from outside the agent — a tool result, an
+external call's response, a retrieved document — **MAY** be screened before it reaches the Brain.
+When screening is configured:
+
+- The screen **MUST** run before the text is appended to `observations`.
+- A refusal **MUST** be non-terminal and **MUST NOT** silently drop the text; the agent is told the
+  content was refused, so it can proceed differently.
+- Screening **MUST** reuse the Gate (§4.2) rather than introduce a second guardian. Instructions
+  arriving inside data are the same category of thing as instructions arriving in a prompt.
+
+Absent every control in this section, behavior is exactly as if the section did not exist.
 
 ---
 
@@ -485,7 +564,11 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
    both a batched and a streamed loop **MUST** enforce it in both, since a guardian that can
    answer on one path is a guardian that can answer.
 7. **Irreversible before, not after.** An irreversible action **MUST** be authorized before
-   execution by a trusted guardian (deterministic rule and/or human), never after.
+   execution by a trusted guardian (deterministic rule and/or human), never after. And it
+   **MUST** happen at most once: an implementation offering retries or resumption offers two
+   mechanisms whose whole purpose is to run something again, so it **MUST** also offer run-once
+   for irreversible effects (§4.9). Authorizing an act correctly and then performing it twice
+   fails this invariant just as surely as never authorizing it.
 8. **The boundary.** External state **MUST** enter only as Data (via a Direction that reached
    out) and effects **MUST** leave only via Direction. The three natures are the agent's
    interior.
@@ -592,6 +675,14 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - [ ] **Full:** guardian overreach is neutralized on every processing path, batched and streamed
       alike (§7.6)
 - [ ] **Full:** irreversible actions authorized before execution (§7.7)
+- [ ] **Full (optional):** a proposed act is carried as an AgentEffect, and Direction authorizes,
+      records intent, approves, executes and records the outcome in that order (§3.3, §4.9)
+- [ ] **Full (optional):** an effect executes at most once per derived idempotency key; the key is
+      never supplied by the caller or the Brain (§4.9, §7.7)
+- [ ] **Full (optional):** a Pending approval stops the turn with AwaitingApproval and executes
+      nothing; a denial is non-terminal and carries its reason (§3.1, §4.9)
+- [ ] **Full (optional):** untrusted inbound text is screened by the Gate before it reaches
+      observations, and a refusal is non-terminal rather than silently dropped (§4.9)
 - [ ] **Full:** structured tool-calls — tools advertise name/description/parameters; `TOOL:`
       calls parsed from the first line; malformed calls recover, not crash (§6.1)
 - [ ] **Full (optional):** boundary redaction hides configured values from **every** model —
@@ -603,7 +694,7 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - [ ] Every capability reachable Local, External and Custom; mode names say where the capability
       comes from; any omitted mode documented with its reason (§4.8)
 - [ ] **Full (optional):** the decision log is append-only — beginning a run never discards prior
-      records — and every record carries runId / sequence / timestamp / kind (§3.3, §4.7)
+      records — and every record carries runId / sequence / timestamp / kind (§3.4, §4.7)
 - [ ] **Full (optional):** concurrent runs stay attributable; a run is reconstructible by runId
       ordered by sequence; no record is corrupted by a concurrent write (§4.7)
 - [ ] **Full (optional):** the decision log SHOULD be hash-chained so alteration or removal of a

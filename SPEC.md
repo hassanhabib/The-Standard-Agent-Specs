@@ -1,11 +1,18 @@
 # The Standard for Agents — Specification
-**Version 0.1 (draft)**
+**Version 1.0**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
 is `Standard.Agents` (C#). The rationale and philosophy live in the companion theory,
 *The Tri-Nature of Agent* (`THE-TRI-NATURE-OF-AGENT.md`); this document is the buildable
 contract.
+
+Version 1.0 settles it. Everything below has been built at least once and certified against the
+conformance vectors, so nothing here is a shape nobody has tried. The test of this document is not
+whether it reads well: it is whether someone who has never seen the reference implementation can
+build one that passes the same vectors. Where a requirement was reachable only by a mechanism the
+text left unsaid, that mechanism is now said — §4.11's run continuity is the clearest example, and
+it was found by building the thing rather than by rereading the prose.
 
 ---
 
@@ -34,6 +41,17 @@ A conformance claim that cannot be checked is marketing. An implementation claim
 
 These are obligations on the *claim*, not on the agent. An implementation may be excellent and
 claim nothing; what it may not do is claim a level it cannot demonstrate.
+
+**Readiness levels.** §8 defines two conformance profiles — Core and Full — and Full is a wide door:
+it spans an agent with a Judge and an agent that can move money. An implementation **MAY** therefore
+publish finer *readiness levels* within Full, and where it does, each level **MUST** name the
+evidence it requires rather than describing itself in prose. A level defined by adjectives cannot be
+failed. The reference implementation publishes four — Core, Reliable, Enterprise, Critical — as
+machine-readable lists of required vectors, which is what makes `--profile Critical` answerable with
+an exit code rather than an opinion.
+
+Levels are the implementation's to name; the obligation this section imposes is only that a claimed
+level be checkable by someone who does not trust the claimant.
 
 ---
 
@@ -114,17 +132,37 @@ enum RiskLevel { Safe, Sensitive, Irreversible }
 
 record AgentEffect {
   runId               : Text        // the run proposing it (§4.4)
-  principal           : Text?       // on whose behalf, when known
+  principal           : Principal?  // on whose behalf, when known
   toolName            : Text
   arguments           : Text
   idempotencyKey      : Text        // derived, not supplied — see §4.9
   riskLevel           : RiskLevel   // defaults to Safe
   approvalRequirement : Bool        // defaults to false
 }
+
+record Principal {
+  id           : Text
+  tenantId     : Text?      // where one agent serves several tenants
+  jurisdiction : Text?      // the regime this act falls under
+  delegatedBy  : Text?      // who this principal is acting FOR, when delegated
+}
 ```
 
 - `riskLevel` **MUST** default to `Safe`, so an implementation that adopts effects without
   classifying its tools behaves exactly as it did before.
+- The principal **MUST** be carried on the effect itself, so it reaches the authorization decision
+  and not merely the record written afterwards. An implementation that names the caller in its
+  decision log while authorizing without them has not implemented identity-aware authorization; it
+  has implemented identity-aware *reporting* (§4.9).
+- It **MUST** be resolved per act rather than fixed at construction. One instance serves many
+  callers (§4.4), so an identity captured once is the wrong identity for every prompt but the first.
+- Every field beyond `id` is **OPTIONAL**, and an implementation offering only `id` is conformant.
+  They exist so a host that knows more is not forced to encode it into a string. A policy is
+  routinely written as *this principal, in this tenant, under this jurisdiction*, and a delegated
+  act is a different question from the same service acting for itself.
+- An implementation **MUST NOT** mint a principal. Establishing identity — tokens, sign-in,
+  credential lifetime — is the host's; the framework consumes what it is given, and inventing an
+  identity where none was supplied would make an authorization decision about a fiction.
 
 ### 3.4 Usage (OPTIONAL capability — §4.10)
 
@@ -609,6 +647,7 @@ record Session {
   history : List<Turn>
   status  : AgentStatus      // what the session was left in the middle of
   pending : AgentEffect?     // an effect awaiting approval, if any (§4.9)
+  runId   : Text             // the run that last worked this session (see Run continuity)
 }
 ```
 
@@ -629,6 +668,28 @@ record Session {
   being alive has not implemented this.
 - A resumed effect **MUST** be subject to run-once (§4.9). Resumption exists to continue work
   that may have partly happened, which is precisely when running it twice is possible.
+- A session left awaiting approval **MUST** carry the effect it is waiting on, not merely the fact
+  that something is waiting. A process that picks the session up has to be able to show an
+  authority *what* it is permitting, and an approval that arrives cannot be checked against the act
+  it was granted for unless that act's `idempotencyKey` (§4.9) travelled with the pause.
+
+**Run continuity.** The requirement above — that a resumed effect is subject to run-once — is not
+reachable unless the resumed run keeps the interrupted run's identity, because the idempotency key
+is *derived* from the run (§4.9). A fresh run id produces a fresh key, the ledger recognises
+nothing, and the act goes out a second time. Therefore:
+
+- A session **MUST** record the run working it, and **MUST** record it when the run *starts*, not
+  when it finishes. A crash means nothing at the end runs at all; an identity written only on
+  success is one the failure case can never use. This write carries no answer — a prompt that has
+  not been answered **MUST NOT** be recorded as though it had.
+- A prompt continuing a session that **did not deliver** — anything other than a conclusion the
+  caller received, so cancelled, exhausted, faulted, or awaiting — **MUST** adopt the recorded run
+  identity rather than beginning a new run.
+- A prompt continuing a session that *did* deliver **MUST** begin a new run. A finished conversation
+  is not an interrupted one, and reusing its identity would make the next prompt's acts collide with
+  the last prompt's ledger entries.
+- An implementation whose run identity cannot outlive the process has not implemented resumption,
+  whatever else it persists.
 
 **Neutrality.** Absent a `sessionId`, behavior is exactly as if this section did not exist: no
 session is loaded, none is written, and the agent is stateless prompt to prompt.
@@ -725,6 +786,69 @@ string **MAY** receive the raw `arguments` JSON. Where a sub-agent is the tool, 
 
 Structured tool-calls are **additive**: the text reference protocol remains the Core contract
 (§8.1), and Core conformance is unaffected.
+
+---
+
+### 6.2 Provider-native tool-calls (Full — MAY)
+
+§6.1 keeps the call in the text and parses it, which is what makes it portable. This section is for
+implementations that instead speak a provider's own tool-calling API — where the choice never
+becomes text at all, and the provider returns it as typed data.
+
+The reason to do so is not elegance. A model asked to emit `ACTION: calculator: 47*89` is imitating
+a format; the same model emitting a tool call is doing what it was trained on. What the text
+protocol cannot express *at any length* is **which call a result answers**, and that is the whole
+subject of this section.
+
+An implementation offering this **MUST NOT** replace §6.0. The text protocol remains the Core
+contract, because it is the one that works against every endpoint — including the small local
+models that follow a format more reliably than they emit schema-valid arguments.
+
+**The exchange.** A native generation contract carries a conversation rather than two strings:
+
+```
+enum  MessageRole   { System, User, Assistant, Tool }
+
+record Message {
+  role       : MessageRole
+  content    : Text
+  toolCalls  : List<ToolCall>   // set when the assistant asked for calls
+  toolCallId : Text?            // set on a Tool message — which call it answers
+}
+
+record ToolCall       { id : Text, name : Text, arguments : Text }   // arguments as JSON
+record ToolDefinition { name : Text, description : Text, parameters : Text }
+record Generation     { content : Text, toolCalls : List<ToolCall>, usage : Usage }
+```
+
+**Advertisement** is unchanged from §6.1: tools are offered as Data, a description is the opt-in,
+and a tool without one is callable but not advertised. Presenting them as typed definitions rather
+than as prose does not widen what the Brain may reach for.
+
+**Attribution (MUST).** This is the requirement that distinguishes this section from §6.1:
+
+- When a tool call has been performed, the next generation **MUST** include the assistant's request
+  carrying that call's `id`, followed by a `Tool` message whose `toolCallId` is that same `id` and
+  whose content is the result.
+- **Every** call **MUST** be answered, whatever the outcome. A policy denial, a withheld result
+  (§4.9) and a failure are answers; a call left unanswered strands the conversation, and providers
+  are entitled to reject one whose tool call has no matching tool message.
+- Narrating results back as prose instead — *"calculator: 4183"* in an assistant message — does
+  **not** satisfy this. It leaves the model matching answers to questions by reading, which is the
+  guessing native tool calling exists to remove.
+- Ids are the provider's or the implementation's to mint, and are **not** the idempotency key of
+  §4.9. A model may reuse or vary an id; run-once **MUST NOT** depend on one.
+
+**One act per turn.** A provider may return several calls at once. Direction performs acts one at a
+time, because authorization, approval and run-once are judgments about a *single* act (§4.9). An
+implementation **MAY** carry the remainder forward, and **SHOULD** rely on the model re-proposing
+them — run-once makes a repeat of an act already performed cost nothing.
+
+**Nothing else changes.** Adopting native calls changes how a choice is *read*. Interpretation is
+the only part that differs: the guardians, the perimeter, budgets, redaction (§4.6 applies to every
+message going out and every reply coming back, exactly as on the text path) and the loop itself
+**MUST** behave identically. An implementation where a control holds on one protocol and not the
+other has not implemented this section; it has forked its agent.
 
 ---
 
@@ -856,6 +980,11 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - [ ] **Full (optional):** a session carries conversation across prompts, is bounded, records only
       completed prompts, and resumes an AwaitingInput or AwaitingApproval pause from a DIFFERENT
       process; a resumed effect is subject to run-once (§3.2, §4.11, §4.9)
+- [ ] **Full (optional):** a session records the run working it, written when the run STARTS; a
+      prompt continuing a session that did not deliver adopts that run identity, so a resumed act
+      derives the same idempotency key and is replayed rather than performed twice (§4.11, §4.9)
+- [ ] **Full (optional):** a session awaiting approval carries the effect it is waiting on, so the
+      act can be shown to an authority and checked against the approval that arrives (§4.11)
 - [ ] One instance serves concurrent prompts; run identity and counters are per invocation, never
       per instance, so no run corrupts another's record (§4.4, §7.4)
 - [ ] Reply protocol: first-line ACTION, terminal ReturnResponse / Refuse (§6)
@@ -875,6 +1004,15 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
       nothing; a denial is non-terminal and carries its reason (§3.1, §4.9)
 - [ ] **Full (optional):** untrusted inbound text is screened by the Gate before it reaches
       observations, and a refusal is non-terminal rather than silently dropped (§4.9)
+- [ ] **Full (optional):** the principal reaches the authorization decision on the effect, resolved
+      per act; a policy can refuse on identity alone; absent an identity the effect claims none
+      rather than inventing one (§3.3, §4.9)
+- [ ] **Full (optional):** an act that was denied or held has its run-once claim released, so an
+      approval that arrives later can still be used; a claim with no outcome reads as in flight,
+      which is neither "never happened" nor "finished" (§4.9)
+- [ ] **Full (optional):** compensation unwinds only what the run performed, in reverse order, best
+      effort per effect; a tool that declares no way back is reported as an effect that stands
+      rather than counted as undone (§4.9, §7.7)
 - [ ] **Full (optional):** a cancelled run stops at the next turn boundary, is not reported as
       success, and leaves no effect half-recorded (§4.10)
 - [ ] **Full (optional):** retries are bounded, chosen by error category rather than message, do
@@ -889,6 +1027,10 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
       together, keeping the highest-ranked content; memory may be filtered by relevance and age (§4.2)
 - [ ] **Full:** structured tool-calls — tools advertise name/description/parameters; `TOOL:`
       calls parsed from the first line; malformed calls recover, not crash (§6.1)
+- [ ] **Full (optional):** provider-native tool-calls round-trip — the next generation carries the
+      assistant's request with its call id and a Tool message answering that id; every call is
+      answered, denials and withheld results included; the text protocol still works and every
+      control behaves identically on both (§6.2)
 - [ ] **Full (optional):** boundary redaction hides configured values from **every** model —
       Brain, Gate and Judge alike — and rehydrates the reply; none sees them in the clear (§4.6)
 - [ ] **Full (optional):** a tool allow-list denies disallowed tools at Direction before

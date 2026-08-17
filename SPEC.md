@@ -102,7 +102,23 @@ record AgentEffect {
 - `riskLevel` **MUST** default to `Safe`, so an implementation that adopts effects without
   classifying its tools behaves exactly as it did before.
 
-### 3.4 AuditRecord (OPTIONAL capability — §4.7)
+### 3.4 Usage (OPTIONAL capability — §4.10)
+
+What a model call actually cost. Reported by the provider where it can be, so a budget bounds
+real consumption rather than an estimate of it.
+
+```
+record Usage {
+  promptTokens     : Number
+  completionTokens : Number
+}
+```
+
+- An implementation **MUST NOT** present an estimate as a measurement. Where a provider reports
+  usage, the reported value **MUST** be used; where it does not, the absence **MUST** be
+  distinguishable from zero.
+
+### 3.5 AuditRecord (OPTIONAL capability — §4.7)
 
 One structured event in the agent's **decision log**. Present only when a host configures a
 decision log; the type is specified here so that log is portable across implementations.
@@ -154,6 +170,7 @@ interface LogBroker        { reset() -> Async<Void>;  write(line: Text) -> Async
 interface AuditBroker      { write(record: AuditRecord) -> Async<Void> }                   // support broker, OPTIONAL (§4.7)
 interface PolicyBroker     { authorize(effect: AgentEffect) -> Async<AuthorizationDecision> }  // support broker, OPTIONAL (§4.9)
 interface ApprovalBroker   { request(effect: AgentEffect) -> Async<ApprovalDecision> }         // support broker, OPTIONAL (§4.9)
+interface ResilienceBroker { execute<T>(operation: () -> Async<T>) -> Async<T> }               // support broker, OPTIONAL (§4.10)
 ```
 
 `AuthorizationDecision` is `{ permitted: Bool, reason: Text }` and `ApprovalDecision` is
@@ -345,7 +362,7 @@ above it (§4.1).
   to the decision log.
 
 **Attribution and order.**
-- Every record **MUST** carry `runId`, `sequence`, `timestamp`, and `kind` (§3.4).
+- Every record **MUST** carry `runId`, `sequence`, `timestamp`, and `kind` (§3.5).
 - Records from concurrent runs **MAY** interleave in the sink. Each record **MUST** remain
   attributable to exactly one run, and a reader **MUST** be able to reconstruct any run's records,
   in order, by selecting on `runId` and ordering by `sequence`.
@@ -447,6 +464,51 @@ When screening is configured:
   arriving inside data are the same category of thing as instructions arriving in a prompt.
 
 Absent every control in this section, behavior is exactly as if the section did not exist.
+
+---
+
+### 4.10 Resilience and Budget (Full, OPTIONAL capabilities)
+
+An agent that cannot be stopped, cannot survive a transient failure, and cannot say what it spent
+is not something an enterprise can operate — however correct each decision is.
+
+**Cancellation.** `processPrompt` **SHOULD** accept a cancellation signal.
+
+- When cancelled, the loop **MUST** stop at the next turn boundary at the latest, and **MUST NOT**
+  begin a new turn.
+- Cancellation **MUST NOT** be reported as success. A cancelled run's result is not an answer.
+- An in-flight *effect* (§4.9) **MUST NOT** be abandoned half-recorded: its outcome is written
+  before the loop notices the cancellation, or the effect never began.
+
+**Retry.** A transient failure **MAY** be retried.
+
+- What is retryable is decided by the **error's category, not its text**. A dependency failure is
+  retryable; a validation failure never is, because retrying it will fail identically and only
+  spends the budget.
+- Retries **MUST** be bounded and **SHOULD** back off, with jitter where many agents share a
+  provider.
+- A retried call is still one *turn*: retrying **MUST NOT** consume the turn budget (§5), because
+  a turn is a unit of the agent's reasoning, not of the network's luck.
+- **Retrying an effect is subject to run-once** (§4.9). This is the point where retry and
+  Invariant 7 meet, and where an implementation that added retries without a ledger has silently
+  built a way to pay twice.
+
+**Budget.** An implementation **MAY** bound what one prompt may consume — tokens, cost, or wall
+clock.
+
+- A budget **MUST** be checked between turns and **MUST** stop the loop when exhausted.
+- Exhaustion **MUST** be reported distinguishably: it is not a refusal and not an answer. A caller
+  that cannot tell "I will not" from "I ran out" cannot decide whether to retry.
+- Where a provider reports usage (§3.4), a budget **MUST** be measured against reported usage
+  rather than an estimate.
+- `MAX_TURNS` (§5) is a budget of the same family and **MUST** continue to apply.
+
+**Guardian efficiency.** Screening the same unchanged input on every turn is waste, not safety.
+
+- An implementation **MAY** screen a prompt once per prompt rather than once per turn, provided
+  the input being screened has not changed.
+- This **MUST NOT** weaken any guardian guarantee: untrusted inbound (§4.9) changes every turn and
+  is therefore screened every time it appears.
 
 ---
 
@@ -683,6 +745,12 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
       nothing; a denial is non-terminal and carries its reason (§3.1, §4.9)
 - [ ] **Full (optional):** untrusted inbound text is screened by the Gate before it reaches
       observations, and a refusal is non-terminal rather than silently dropped (§4.9)
+- [ ] **Full (optional):** a cancelled run stops at the next turn boundary, is not reported as
+      success, and leaves no effect half-recorded (§4.10)
+- [ ] **Full (optional):** retries are bounded, chosen by error category rather than message, do
+      not consume the turn budget, and are subject to run-once (§4.10, §7.7)
+- [ ] **Full (optional):** a budget stops the loop between turns, is measured against reported
+      usage rather than an estimate, and exhaustion is distinguishable from a refusal (§3.4, §4.10)
 - [ ] **Full:** structured tool-calls — tools advertise name/description/parameters; `TOOL:`
       calls parsed from the first line; malformed calls recover, not crash (§6.1)
 - [ ] **Full (optional):** boundary redaction hides configured values from **every** model —
@@ -694,7 +762,7 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - [ ] Every capability reachable Local, External and Custom; mode names say where the capability
       comes from; any omitted mode documented with its reason (§4.8)
 - [ ] **Full (optional):** the decision log is append-only — beginning a run never discards prior
-      records — and every record carries runId / sequence / timestamp / kind (§3.4, §4.7)
+      records — and every record carries runId / sequence / timestamp / kind (§3.5, §4.7)
 - [ ] **Full (optional):** concurrent runs stay attributable; a run is reconstructible by runId
       ordered by sequence; no record is corrupted by a concurrent write (§4.7)
 - [ ] **Full (optional):** the decision log SHOULD be hash-chained so alteration or removal of a

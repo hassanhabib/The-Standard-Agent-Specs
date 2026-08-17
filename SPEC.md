@@ -222,6 +222,23 @@ file-backed `SkillBroker` **SHOULD** discover skills recursively (a skill **MAY*
 subdirectory) and **MAY** read each skill's `name` / `description` from metadata (e.g. frontmatter),
 stripping that metadata from `content`.
 
+**Retrieval is ranked, and what Recall injects is bounded.** `retrieveKnowledge` and
+`recallMemories` answer *what is relevant to this task*, not *what exists*.
+
+- Retrieval **MUST** rank candidates by relevance to the query and return the best, not the first
+  found. Matching the whole query literally against whole documents is not retrieval: a natural
+  question will not appear verbatim inside an answer, so such an implementation returns nothing
+  for exactly the queries a user asks.
+- A result **SHOULD** be the relevant passage rather than the whole document, so a large source
+  costs proportionally to what it contributed.
+- How relevance is computed — term overlap, lexical scoring, embeddings — is the broker's concern
+  and **MAY** improve without changing any contract above it (§9).
+- What Recall injects **MAY** be bounded. When it is, the bound applies across skills, memories
+  and knowledge together, and the highest-ranked content **MUST** be kept. Unbounded recall makes
+  every prompt cost whatever has accumulated, which is a bill that grows on its own.
+- Memory **MAY** be filtered by relevance and age. Forgetting is a feature: a memory store that
+  only grows eventually poisons every prompt it is injected into.
+
 `retrieveSkills(route)` composes the applicable skills' bodies into the `systemPrompt`. When `route`
 is non-empty (from the Gate's `route` verdict, §4.3) it selects the matching skill(s) by `name`, so a
 specialist skill is pulled in only when relevant. `retrieveSkillCatalog()` renders the **index** of
@@ -503,6 +520,15 @@ clock.
   rather than an estimate.
 - `MAX_TURNS` (§5) is a budget of the same family and **MUST** continue to apply.
 
+**Degradation before failure.** An implementation **MAY** track a provider's health and stop
+calling one that is failing.
+
+- When a provider is judged unhealthy, calls **SHOULD** be routed to a configured alternative
+  rather than failed outright. A degraded answer is worth more than no answer.
+- An implementation with no alternative configured **MUST** fail rather than pretend: silently
+  returning an empty or fabricated result is worse than an error, because the caller cannot tell.
+- Health tracking **MUST NOT** change any verdict or result while the primary is healthy.
+
 **Guardian efficiency.** Screening the same unchanged input on every turn is waste, not safety.
 
 - An implementation **MAY** screen a prompt once per prompt rather than once per turn, provided
@@ -751,6 +777,12 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
       not consume the turn budget, and are subject to run-once (§4.10, §7.7)
 - [ ] **Full (optional):** a budget stops the loop between turns, is measured against reported
       usage rather than an estimate, and exhaustion is distinguishable from a refusal (§3.4, §4.10)
+- [ ] **Full (optional):** an unhealthy provider degrades to a configured alternative rather than
+      failing, and an implementation with no alternative fails rather than fabricates (§4.10)
+- [ ] Retrieval ranks by relevance and returns the best rather than the first found; a natural
+      question retrieves the passage that answers it (§4.2)
+- [ ] **Full (optional):** what Recall injects is bounded across skills, memories and knowledge
+      together, keeping the highest-ranked content; memory may be filtered by relevance and age (§4.2)
 - [ ] **Full:** structured tool-calls — tools advertise name/description/parameters; `TOOL:`
       calls parsed from the first line; malformed calls recover, not crash (§6.1)
 - [ ] **Full (optional):** boundary redaction hides configured values from **every** model —

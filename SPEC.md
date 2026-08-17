@@ -18,6 +18,23 @@ An implementation is **Standard-Agents Conformant** at a given **profile** (§8)
 satisfies every MUST for that profile. Conformance is about **contracts and behavior**,
 not file layout or language idiom.
 
+### 1.1 Claiming conformance
+
+A conformance claim that cannot be checked is marketing. An implementation claiming a profile:
+
+- **MUST** state which profile it claims, and **MUST** state it per released version. "Conformant"
+  without a profile and a version says nothing.
+- **MUST** make the claim **reproducible by a third party**: the evidence is a runnable
+  certification over the vectors, and running it **MUST** be possible without access to anything
+  the implementer holds privately.
+- **MUST NOT** claim a profile whose evidence it has not run. A profile whose requirements are
+  merely believed to hold is not claimed, it is assumed.
+- **SHOULD** publish what a consumer needs in order to depend on it: which contracts are stable,
+  what a deprecation looks like and how long one lasts, and how to move between versions.
+
+These are obligations on the *claim*, not on the agent. An implementation may be excellent and
+claim nothing; what it may not do is claim a level it cannot demonstrate.
+
 ---
 
 ## 2. Notation
@@ -742,6 +759,8 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 
 ## 10. Conformance Checklist
 
+- [ ] A conformance claim names its profile and its version, and its evidence is runnable by a
+      third party (§1.1)
 - [ ] `AgentContext` and `AgentStatus` as specified (§3)
 - [ ] Loop caps turns; non-terminal results feed back into observations (§5)
 - [ ] Brokers thin — one resource, no flow control, no authored prompts (§4.1, §7.3)

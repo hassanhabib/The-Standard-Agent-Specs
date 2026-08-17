@@ -495,6 +495,28 @@ Direction **MUST** apply the following order, and **MUST NOT** reorder it:
   something *again*, so an implementation offering either **MUST** offer run-once for
   `Irreversible` effects, or it has built two ways to pay a wire transfer twice.
 
+**Compensation.** Run-once makes an effect safe to *propose* twice. It does nothing for the effects
+that cannot be made idempotent at all — a payment sent, a message delivered, a record filed with a
+third party — where the only way back is a second, opposite act. An implementation **MAY** offer
+compensation. When it does:
+
+- A tool **MUST** be able to declare how it is undone, given the same arguments it was called with
+  and the outcome it produced. Both are required: an undo that only knows the arguments cannot
+  cancel the specific booking that was made.
+- A tool that declares nothing **MUST** report that the effect stands, and **MUST NOT** be treated
+  as having been undone. Silence is not reversal, and a run that reports itself cleanly unwound
+  when it was not is worse than one that never offered compensation.
+- Compensation **MUST** unwind in reverse order of execution. A later effect may depend on an
+  earlier one, and undoing the booking before the payment that bought it leaves the payment
+  attached to nothing.
+- It **MUST** operate on what the run actually *performed* — not on what was proposed, not on what
+  was authorized. An effect denied by policy, held for approval, or replayed from the ledger was
+  never performed by this run and **MUST NOT** be compensated.
+- Compensation is itself a set of effects and **MUST NOT** be exempt from the perimeter's record
+  keeping: each attempt and its result **MUST** be recorded like any other act.
+- A failed compensation **MUST NOT** stop the remaining ones. The unwind is best-effort per effect,
+  and abandoning the rest because the first refused would leave more standing, not less.
+
 **Untrusted inbound.** Text that entered as Data from outside the agent — a tool result, an
 external call's response, a retrieved document — **MAY** be screened before it reaches the Brain.
 When screening is configured:
@@ -722,7 +744,9 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
    **MUST** happen at most once: an implementation offering retries or resumption offers two
    mechanisms whose whole purpose is to run something again, so it **MUST** also offer run-once
    for irreversible effects (§4.9). Authorizing an act correctly and then performing it twice
-   fails this invariant just as surely as never authorizing it.
+   fails this invariant just as surely as never authorizing it. Where an act cannot be made
+   idempotent, an implementation **MAY** offer compensation (§4.9) — and if it does, it **MUST**
+   report the effects it could not undo rather than reporting the run cleanly unwound.
 8. **The boundary.** External state **MUST** enter only as Data (via a Direction that reached
    out) and effects **MUST** leave only via Direction. The three natures are the agent's
    interior.

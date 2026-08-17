@@ -80,6 +80,8 @@ which nature last wrote each field.
 ```
 record AgentContext {
   prompt        : Text          // the task (input)
+  sessionId     : Text?         // DATA:      the conversation this prompt belongs to (§4.11)
+  history       : List<Turn>    // DATA:      what was said before, oldest first (§4.11)
   systemPrompt  : Text          // DATA:      written by Recall
   observations  : List<Text>    // DATA:      written by Recall / Act
   intent        : Text          // DECISION:  written by Think
@@ -88,6 +90,11 @@ record AgentContext {
   rawReply      : Text          // DECISION:  written by Think
   result        : Text          // DIRECTION: written by Act
   status        : AgentStatus   // DIRECTION: written by Act
+}
+
+record Turn {
+  prompt : Text
+  answer : Text
 }
 ```
 
@@ -188,6 +195,7 @@ interface AuditBroker      { write(record: AuditRecord) -> Async<Void> }        
 interface PolicyBroker     { authorize(effect: AgentEffect) -> Async<AuthorizationDecision> }  // support broker, OPTIONAL (§4.9)
 interface ApprovalBroker   { request(effect: AgentEffect) -> Async<ApprovalDecision> }         // support broker, OPTIONAL (§4.9)
 interface ResilienceBroker { execute<T>(operation: () -> Async<T>) -> Async<T> }               // support broker, OPTIONAL (§4.10)
+interface SessionBroker    { selectSession(id: Text) -> Async<Session?>;  upsertSession(s: Session) -> Async<Void> }  // OPTIONAL (§4.11)
 ```
 
 `AuthorizationDecision` is `{ permitted: Bool, reason: Text }` and `ApprovalDecision` is
@@ -553,6 +561,47 @@ calling one that is failing.
 - This **MUST NOT** weaken any guardian guarantee: untrusted inbound (§4.9) changes every turn and
   is therefore screened every time it appears.
 
+### 4.11 Sessions and Conversation (Full, OPTIONAL capability)
+
+Invariant 4 says the agent instance is stateless across prompts. It does **not** say the
+*conversation* is. A session is that distinction made real: the continuity lives outside the agent,
+in a broker, and is recalled into a prompt the same way memory and knowledge are.
+
+Without one, every prompt starts from nothing. *"And what about Paris?"* has no idea what came
+before, and `AwaitingInput` (§3.1) is a dead end — the agent asks a clarifying question and then
+discards the context needed to use the answer. An implementation offering `AwaitingInput` or
+`AwaitingApproval` without sessions has built a pause it cannot resume from.
+
+```
+record Session {
+  id      : Text
+  history : List<Turn>
+  status  : AgentStatus      // what the session was left in the middle of
+  pending : AgentEffect?     // an effect awaiting approval, if any (§4.9)
+}
+```
+
+**Continuity.**
+- When a `sessionId` is supplied, Recall **MUST** load that session's history into the context
+  before Decision runs, so the Brain sees what was said before.
+- History **MUST** be ordered oldest first and **MUST** be bounded — by the context budget (§4.2)
+  or by its own limit. An unbounded history makes every prompt in a long conversation cost more
+  than the last, without limit.
+- A completed prompt **MUST** be appended to the session before the call returns, so the next
+  prompt sees it. A prompt that failed or was cancelled **MUST NOT** be recorded as an answer.
+
+**Resumption.**
+- A session left in `AwaitingInput` or `AwaitingApproval` **MUST** be resumable: a later prompt
+  carrying the same `sessionId` continues from that point rather than starting over.
+- Resumption **MUST** work from a *different process*. The session is the state; the agent
+  instance is not, and an implementation whose resumption depends on the original instance still
+  being alive has not implemented this.
+- A resumed effect **MUST** be subject to run-once (§4.9). Resumption exists to continue work
+  that may have partly happened, which is precisely when running it twice is possible.
+
+**Neutrality.** Absent a `sessionId`, behavior is exactly as if this section did not exist: no
+session is loaded, none is written, and the agent is stateless prompt to prompt.
+
 ---
 
 ## 5. The Loop (normative algorithm)
@@ -771,6 +820,9 @@ Structured tool-calls are **additive**: the text reference protocol remains the 
 - [ ] Skills are discrete entries (name / description / content); a file source discovers them
       recursively; described skills are advertised as an index for model-driven routing (§4.1–§4.2)
 - [ ] Agent instance stateless across prompts; persistent memory external (§7.4)
+- [ ] **Full (optional):** a session carries conversation across prompts, is bounded, records only
+      completed prompts, and resumes an AwaitingInput or AwaitingApproval pause from a DIFFERENT
+      process; a resumed effect is subject to run-once (§3.2, §4.11, §4.9)
 - [ ] One instance serves concurrent prompts; run identity and counters are per invocation, never
       per instance, so no run corrupts another's record (§4.4, §7.4)
 - [ ] Reply protocol: first-line ACTION, terminal ReturnResponse / Refuse (§6)

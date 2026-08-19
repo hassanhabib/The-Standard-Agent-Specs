@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.0**
+**Version 1.1**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -7,12 +7,20 @@ is `Standard.Agents` (C#). The rationale and philosophy live in the companion th
 *The Tri-Nature of Agent* (`THE-TRI-NATURE-OF-AGENT.md`); this document is the buildable
 contract.
 
-Version 1.0 settles it. Everything below has been built at least once and certified against the
+Version 1.0 settled it. Everything below has been built at least once and certified against the
 conformance vectors, so nothing here is a shape nobody has tried. The test of this document is not
 whether it reads well: it is whether someone who has never seen the reference implementation can
 build one that passes the same vectors. Where a requirement was reachable only by a mechanism the
 text left unsaid, that mechanism is now said — §4.11's run continuity is the clearest example, and
 it was found by building the thing rather than by rereading the prose.
+
+**Version 1.1** closes the first gap found by that test being applied in the other direction —
+not "can someone else build this?" but "does the reference implementation actually do what this
+says?" It did not. §4.10's budget was enforced only where a provider volunteered its usage
+numbers, which is to say not on the text protocol at all, and the document permitted that by
+saying nothing about the case where there is none. A specification that is silent where an
+implementer will guess has not settled the question; it has moved it. §3.4 and §4.10 now say it
+outright, and the conformance vectors can express it, which they previously could not.
 
 ---
 
@@ -166,19 +174,30 @@ record Principal {
 
 ### 3.4 Usage (OPTIONAL capability — §4.10)
 
-What a model call actually cost. Reported by the provider where it can be, so a budget bounds
-real consumption rather than an estimate of it.
+What a model call actually cost. Reported by the provider where it can be, counted locally where
+it cannot, and **always marked as one or the other** — because a bound *enforced* on an estimate
+and a bound *reconciled* against an invoice are different claims.
 
 ```
 record Usage {
   promptTokens     : Number
   completionTokens : Number
+  isEstimated      : Boolean
 }
 ```
 
-- An implementation **MUST NOT** present an estimate as a measurement. Where a provider reports
-  usage, the reported value **MUST** be used; where it does not, the absence **MUST** be
-  distinguishable from zero.
+- Where a provider reports usage, the reported value **MUST** be used, with `isEstimated` false.
+  It is what the invoice will be drawn from.
+- Where a provider reports nothing, an implementation **MUST** count what it sent and received
+  rather than treat the call as free, and **MUST** set `isEstimated` true. Not every protocol
+  volunteers its numbers; the ones that do not are not thereby unbounded (§4.10).
+- An implementation **MUST NOT** present an estimate as a measurement. `isEstimated` is how that
+  obligation is met in a form a caller, a trace, and an audit record can all read — it is not
+  advisory metadata, and dropping it makes every downstream consumer guess.
+
+> Version 1.0 required a reported value and said nothing about the case where there is none. That
+> silence was read as permission to contribute zero, which made the bound in §4.10 inert on any
+> text-only protocol while an implementation still conformed. Stated positively here.
 
 ### 3.5 AuditRecord (OPTIONAL capability — §4.7)
 
@@ -612,7 +631,23 @@ clock.
   that cannot tell "I will not" from "I ran out" cannot decide whether to retry.
 - Where a provider reports usage (§3.4), a budget **MUST** be measured against reported usage
   rather than an estimate.
+- **A budget MUST bound the run on every protocol the implementation supports.** Where a provider
+  reports no usage, the implementation **MUST** count (§3.4) rather than accrue zero. A bound that
+  applies only where a provider volunteers its numbers is not a bound; it is a setting that
+  happens to work on some deployments and silently does nothing on others, with no signal telling
+  the operator which one they have.
+- A cost bound is priced off the token count, so it **MUST** hold wherever the token count does.
+  The two fail independently: an implementation can carry a count and still never price it.
 - `MAX_TURNS` (§5) is a budget of the same family and **MUST** continue to apply.
+
+> This is the requirement Version 1.0 left unsaid, and the cost of leaving it unsaid was not
+> theoretical. The reference implementation set usage only on the native tool-calling path, where
+> the provider volunteers it; on the text protocol every turn accrued zero, `maxTokens` and
+> `maxCostUsd` never tripped, and it passed every conformance vector and claimed the Enterprise
+> profile — which lists budgets by name — for eight releases. The vectors could not catch it
+> because the only budget they could express was wall clock. Both gaps are closed together: the
+> vectors `budget-bounds-tokens-on-any-protocol` and `budget-bounds-cost-on-any-protocol` now
+> certify this requirement, and both were proven able to fail against the old behaviour.
 
 **Degradation before failure.** An implementation **MAY** track a provider's health and stop
 calling one that is failing.
@@ -1018,7 +1053,9 @@ other has not implemented this section; it has forked its agent.
 - [ ] **Full (optional):** retries are bounded, chosen by error category rather than message, do
       not consume the turn budget, and are subject to run-once (§4.10, §7.7)
 - [ ] **Full (optional):** a budget stops the loop between turns, is measured against reported
-      usage rather than an estimate, and exhaustion is distinguishable from a refusal (§3.4, §4.10)
+      usage where there is any and a local count where there is none, bounds the run on **every**
+      protocol rather than only the ones that volunteer their numbers, marks which of the two a
+      number was, and reports exhaustion distinguishably from a refusal (§3.4, §4.10)
 - [ ] **Full (optional):** an unhealthy provider degrades to a configured alternative rather than
       failing, and an implementation with no alternative fails rather than fabricates (§4.10)
 - [ ] Retrieval ranks by relevance and returns the best rather than the first found; a natural

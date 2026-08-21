@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.1**
+**Version 1.2**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -21,6 +21,14 @@ numbers, which is to say not on the text protocol at all, and the document permi
 saying nothing about the case where there is none. A specification that is silent where an
 implementer will guess has not settled the question; it has moved it. §3.4 and §4.10 now say it
 outright, and the conformance vectors can express it, which they previously could not.
+
+**Version 1.2** closes the same kind of gap in §4.9, found the same way. Run-once was correctly
+specified and its *boundary* was never stated, so an implementer reading it would reasonably
+conclude the guarantee is broader than it is. It is scoped to a run: a redelivered trigger starts a
+new run, derives a new key, and performs the effect again. That is the correct behaviour — an agent
+must be able to make a second payment when asked — but a caller who has not been told will discover
+it as a duplicate transaction rather than as a design decision. The boundary is now written down,
+along with the obligation it places on the caller. Nothing about the mechanism changed.
 
 ---
 
@@ -561,6 +569,35 @@ Direction **MUST** apply the following order, and **MUST NOT** reorder it:
   something *again*, so an implementation offering either **MUST** offer run-once for
   `Irreversible` effects, or it has built two ways to pay a wire transfer twice.
 
+**The scope of run-once, stated because it is where implementers assume more than is offered.** The
+key is derived from the run, so the guarantee has a boundary, and the boundary has three cases:
+
+- **Within a run — protected.** A retry, or a Brain re-proposing the same act, derives the same key
+  and is replayed rather than performed.
+- **Across an interrupted run, resumed in the same session — protected**, by run continuity
+  (§4.11). The resumed run keeps the interrupted run's identity, so the key still matches.
+- **Across a *completed* run — NOT protected, and MUST NOT be.** A later run proposing an identical
+  act derives a different key and **MUST** perform it. An agent asked to send a second reminder, or
+  to make a second payment of the same amount to the same payee, has to be able to. A run-once that
+  spanned completed runs would make the second request impossible to express.
+
+It follows — and this is the part no implementer should have to infer — that **run-once does not
+span triggers**. Where the thing that starts a run may start it more than once for the same work
+(an at-least-once message bus, a webhook retry, a scheduler that fires twice, a user who submits
+twice), a second delivery is a second run with a second key, and the effect **WILL** be performed
+again.
+
+- A caller whose delivery may repeat **MUST** deduplicate at the trigger boundary. An
+  implementation **MUST NOT** be read as providing that, and **SHOULD** say so where it documents
+  run-once.
+- An implementation **MUST NOT** close this by admitting a caller-supplied key: that is the same
+  door §4.9 already shuts, and it cannot be opened for a trusted caller without also opening it for
+  an untrusted one, since nothing at the seam can tell them apart.
+
+Delivery semantics belong to the host for the same reason identity does (§3.3): a framework that
+invented them would be deciding something only the host can know. What the specification owes is
+the boundary, not the mechanism.
+
 **Compensation.** Run-once makes an effect safe to *propose* twice. It does nothing for the effects
 that cannot be made idempotent at all — a payment sent, a message delivered, a record filed with a
 third party — where the only way back is a second, opposite act. An implementation **MAY** offer
@@ -1035,6 +1072,10 @@ other has not implemented this section; it has forked its agent.
       records intent, approves, executes and records the outcome in that order (§3.3, §4.9)
 - [ ] **Full (optional):** an effect executes at most once per derived idempotency key; the key is
       never supplied by the caller or the Brain (§4.9, §7.7)
+- [ ] **Full (optional):** run-once holds within a run and across an interrupted run resumed in the
+      same session, and an identical act proposed in a later *completed* run performs again — the
+      boundary is stated rather than left to be assumed, and callers whose delivery may repeat are
+      told they must deduplicate at the trigger (§4.9, §4.11)
 - [ ] **Full (optional):** a Pending approval stops the turn with AwaitingApproval and executes
       nothing; a denial is non-terminal and carries its reason (§3.1, §4.9)
 - [ ] **Full (optional):** untrusted inbound text is screened by the Gate before it reaches

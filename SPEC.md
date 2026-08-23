@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.2**
+**Version 1.3**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -29,6 +29,17 @@ new run, derives a new key, and performs the effect again. That is the correct b
 must be able to make a second payment when asked — but a caller who has not been told will discover
 it as a duplicate transaction rather than as a design decision. The boundary is now written down,
 along with the obligation it places on the caller. Nothing about the mechanism changed.
+
+**Version 1.3** says what permission *is*. §4.9 could name a tool and nothing else, so "may write
+files" could not be told from "may write files under /project" — an authorization model able to
+describe a banking agent and not a file-touching one, which is most of the agents anyone is
+building now. The effect now carries the **scope** it is about to touch, supplied by the tool
+because only the tool knows what its own arguments mean. Two things follow that were previously
+inexpressible: an allow-list can say *where*, and a **mode** can answer for the acts nothing named —
+the only case that matters for an agent whose targets cannot be enumerated at composition. And one
+`MUST NOT`, because the reference implementation got this wrong and nothing caught it: risk **must
+not** be derived from whether an act requires approval, or the middle level is one the
+implementation is structurally incapable of reaching.
 
 ---
 
@@ -154,6 +165,7 @@ record AgentEffect {
   idempotencyKey      : Text        // derived, not supplied — see §4.9
   riskLevel           : RiskLevel   // defaults to Safe
   approvalRequirement : Bool        // defaults to false
+  scope               : Text        // what the act touches; "" when nothing addressable
 }
 
 record Principal {
@@ -166,6 +178,22 @@ record Principal {
 
 - `riskLevel` **MUST** default to `Safe`, so an implementation that adopts effects without
   classifying its tools behaves exactly as it did before.
+- `riskLevel` **MUST NOT** be derived from whether an act requires approval. They answer different
+  questions — *how consequential is this* and *must a human permit it* — and an implementation that
+  makes one the other's predicate can produce only the two extremes, leaving `Sensitive` a level it
+  is structurally incapable of reaching. A tool **SHOULD** declare its own risk, because the tool is
+  the only thing that knows what it does; a host **MAY** override that for tools it did not write,
+  and the host's word wins, because the host is accountable for the deployment.
+- `scope` is **what the act touches** — a path, a host, an account — and **MUST** be supplied by the
+  tool rather than parsed out of `arguments` by the framework. Only the tool knows what its own
+  arguments mean; a framework that parsed them would be guessing, and a host forced to parse them
+  inside a policy delegate reinvents it once per deployment with nothing checking any of them.
+
+> **Permission is what AND where.** "May write files" is not "may write files under /project", and
+> an authorization model that can only name a tool cannot express the difference — which leaves an
+> agent with hands permitted everywhere it is permitted anywhere. That distinction is the whole
+> difference between a model that can describe a file-touching agent and one that can only describe
+> a banking one.
 - The principal **MUST** be carried on the effect itself, so it reaches the authorization decision
   and not merely the record written afterwards. An implementation that names the caller in its
   decision log while authorizing without them has not implemented identity-aware authorization; it
@@ -445,8 +473,37 @@ run to a configured allow-list. When an allow-list is configured:
   the agent can choose a permitted path on the next turn (§5), exactly as it recovers from a
   malformed call (§6.1).
 - Matching **MUST** be over the tool name and **SHOULD** be case-insensitive. The allow-list is Data.
+- An entry **MAY** additionally constrain the effect's `scope` (§3.3). "May write files" is not
+  "may write files under /project", and a list that can only name a tool leaves an agent permitted
+  everywhere it is permitted anywhere.
 - Absent an allow-list, every registered tool is runnable. The control is opt-in and its absence
   changes nothing.
+
+**The disposition toward what nothing permitted.** Explicit permissions answer for the acts they
+name. An implementation **MAY** offer a mode that answers for the rest.
+
+- The default **MUST** be to permit, so an implementation adopting this changes nothing for an
+  existing deployment.
+- A mode **MUST NOT** override an explicit permission. An allow-list that names the act, or a
+  policy that permitted it, has already answered; asking anyway would make the list meaningless.
+- Where the mode is to **ask**, an unpermitted act **MUST** be treated exactly as one requiring
+  approval (§4.9) — held, not failed, and non-terminal.
+
+> This is the case an enumerated model cannot reach, and the reason it matters is not
+> completeness. **An agent that touches files cannot have its targets listed at composition**, so
+> the only acts that can be enumerated are the ones nobody was worried about. Before a disposition
+> exists, everything unlisted is silently permitted — which is the correct default for an agent
+> that only talks, and the wrong one for an agent with hands.
+
+**Remembering a grant.** An implementation **MAY** remember that an authority permitted an act,
+so the same question is not asked twice.
+
+- A remembered grant **MUST** be scoped to the tool **and** the effect's `scope`. Approving a write
+  to one file is not approving writes to every file, and a grant broader than what was asked for is
+  a permission the authority never gave.
+- It **MUST NOT** outlive the run unless the authority itself says otherwise. An approval broker
+  that wants a longer grant already has the means: it answers the next request without asking
+  anyone, which keeps the decision where the accountability is.
 
 ### 4.7 The Decision Log (Full, OPTIONAL capability)
 

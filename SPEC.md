@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.4**
+**Version 1.5**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -49,6 +49,15 @@ with the entry named, because a control the host believes is on and is not is wo
 And §4.12 names **telemetry** as a capability: observation of the loop's own boundaries, under the
 same honesty obligations as everything else that reports — the recorded outcome is the truth the
 caller was told, never a success the run did not earn.
+
+**Version 1.5** makes plurality normative for integrations. An agent connects to many tools,
+many remote tool servers, and many skill sources — and the reference implementation shipped with
+one of each behind a surface that looked plural, where a second registration silently replaced
+the first. §4.8 now states the rule: registering an integration **adds** it; routing across
+several is deterministic and stated; and a capability that deliberately stays singular says why,
+because a surface that silently replaces reads as one that accumulates until the day it loses
+something. Nothing else changed: the seams already held, which is why plurality arrived as a
+composite behind each one.
 
 ---
 
@@ -609,6 +618,18 @@ document can define an agent without authoring code. An implementation offering 
 - **SHOULD** keep the document surface mechanically checkable against the capability surface, the
   same way the three modes are — a capability added to the code surface and absent from the
   document surface is the same invisible erosion §4.8 exists to prevent.
+
+**Plural integrations.** A capability that names an external counterpart — a tool, a remote tool
+server (§4.2), a skill source — is plural in the world, and the surface **SHOULD** treat it so:
+registering a second one **adds** it, and **MUST NOT** silently discard the first. Where several
+registrations answer the same request, the routing **MUST** be deterministic and stated — the
+reference behavior is by declared ownership (a server's own catalog says what it holds), with
+the first registered winning a name more than one claims, the same precedence local tools take
+over remote ones. Where the document surface (above) exists, it **SHOULD** accept plural entries
+wherever the code surface accumulates. A capability the implementation deliberately keeps
+singular **MUST** document why — the same rule as an omitted mode, and for the same reason:
+silence is not a decision, it is a defect a host discovers by losing a source it believed it
+had.
 
 ### 4.9 The Perimeter (Full, OPTIONAL capabilities)
 
@@ -1245,6 +1266,9 @@ other has not implemented this section; it has forked its agent.
 - [ ] **Optional:** composition from a data document refuses an unknown or wrong-shaped entry with
       the entry named; code composes alongside the document; the document surface is mechanically
       checkable against the capability surface (§4.8)
+- [ ] Integrations accumulate — a second tool, remote tool server, or skill source adds, never
+      silently replaces; routing across several is deterministic and stated; a deliberately
+      singular capability documents why (§4.8)
 
 ---
 

@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.3**
+**Version 1.4**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -40,6 +40,15 @@ the only case that matters for an agent whose targets cannot be enumerated at co
 `MUST NOT`, because the reference implementation got this wrong and nothing caught it: risk **must
 not** be derived from whether an act requires approval, or the middle level is one the
 implementation is structurally incapable of reaching.
+
+**Version 1.4** adds two things the reference implementation built and this document had no words
+for. §4.8 gains **composition from data**: the same surface the three modes define, offered as a
+single structured document, so a platform that can produce JSON can define an agent — with the
+one rule that makes it safe, that an entry the surface does not know **must** refuse to compose
+with the entry named, because a control the host believes is on and is not is worse than an error.
+And §4.12 names **telemetry** as a capability: observation of the loop's own boundaries, under the
+same honesty obligations as everything else that reports — the recorded outcome is the truth the
+caller was told, never a success the run did not earn.
 
 ---
 
@@ -583,6 +592,24 @@ Rules:
   **incomplete**, and an implementation **SHOULD** be able to detect that mechanically rather than
   by review.
 
+**Composition from data.** The surface above is code. An implementation **MAY** additionally
+offer the same surface as a single structured document (JSON or equivalent) — one entry per
+capability, named for the surface's own verbs — so that any platform able to produce the
+document can define an agent without authoring code. An implementation offering this:
+
+- **MUST** refuse to compose from a document containing an entry it does not know, or an entry of
+  the wrong shape, and the refusal **MUST** name the entry. A misspelled budget silently ignored
+  is a bound the host believes is holding and is not; the failure mode of configuration is never
+  silence.
+- **MUST** scope the document to what is data. A capability satisfied by host code — a tool, a
+  Custom function, an External broker instance — is outside the document, and the implementation
+  **MUST** allow code to compose alongside the document rather than forcing a choice between them.
+  External tools reached by address (§4.2's remote tools) **MAY** appear in the document, because
+  an address is data.
+- **SHOULD** keep the document surface mechanically checkable against the capability surface, the
+  same way the three modes are — a capability added to the code surface and absent from the
+  document surface is the same invisible erosion §4.8 exists to prevent.
+
 ### 4.9 The Perimeter (Full, OPTIONAL capabilities)
 
 §4.6 hardens what the agent *sends*. This section hardens what the agent *does* and what it
@@ -823,6 +850,33 @@ nothing, and the act goes out a second time. Therefore:
 **Neutrality.** Absent a `sessionId`, behavior is exactly as if this section did not exist: no
 session is loaded, none is written, and the agent is stateless prompt to prompt.
 
+### 4.12 Telemetry (Full, OPTIONAL capability)
+
+The trace (§4.7) narrates for a person and the decision log records for an auditor. Telemetry is
+the third voice: spans and metrics for a collector, emitted at the loop's own boundaries — a run
+opens a scope, each turn opens a scope inside it, each turn's usage is recorded, and the run's
+outcome closes it.
+
+An implementation offering telemetry:
+
+- **MUST NOT** let it change what the agent decides or does. Telemetry observes the loop; a signal
+  that can steer the run is a control and belongs to another section.
+- **MUST** record the run's outcome as the same truth reported to the caller. A run that stopped
+  at its turn cap is recorded as stopped mid-work; a run stopped by budget or cancellation is
+  recorded as such — never as a success the run did not earn. Telemetry that flatters is worse
+  than none, because someone will alert on it.
+- **MUST** carry whether a usage number was reported by the provider or estimated locally (§3.4),
+  so a dashboard never presents an estimate as a measurement.
+- **SHOULD** name spans, attributes and metrics by the prevailing open convention for generative
+  systems (at this writing, the OpenTelemetry GenAI semantic conventions), so a collector that
+  already understands agents understands this one without translation.
+- **SHOULD** cost nothing when nothing is observing. §4.8 applies in full: the Local mode **MUST
+  NOT** require a dependency, which is achievable wherever the platform ships an instrumentation
+  primitive in its standard library.
+
+**Neutrality.** An agent composed without telemetry behaves exactly as if this section did not
+exist.
+
 ---
 
 ## 5. The Loop (normative algorithm)
@@ -932,6 +986,12 @@ subject of this section.
 An implementation offering this **MUST NOT** replace §6.0. The text protocol remains the Core
 contract, because it is the one that works against every endpoint — including the small local
 models that follow a format more reliably than they emit schema-valid arguments.
+
+The contract below is the seam, not the wire. Providers disagree about the bytes — one carries
+the choice as `tool_calls` on a message, another as `tool_use` content blocks answered by
+`tool_result` blocks with its own turn-alternation rules — and an implementation supporting more
+than one **MUST** map each onto this one contract rather than surfacing a second contract per
+provider. The loop above this seam never learns which wire shape answered.
 
 **The exchange.** A native generation contract carries a conversation rather than two strings:
 
@@ -1180,6 +1240,11 @@ other has not implemented this section; it has forked its agent.
       ordered by sequence; no record is corrupted by a concurrent write (§4.7)
 - [ ] **Full (optional):** the decision log SHOULD be hash-chained so alteration or removal of a
       record is detectable (§4.7)
+- [ ] **Full (optional):** telemetry observes and never steers; the recorded outcome is the truth
+      the caller was told; estimated usage never presents as reported (§4.12)
+- [ ] **Optional:** composition from a data document refuses an unknown or wrong-shaped entry with
+      the entry named; code composes alongside the document; the document surface is mechanically
+      checkable against the capability surface (§4.8)
 
 ---
 

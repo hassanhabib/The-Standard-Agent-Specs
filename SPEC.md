@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.5**
+**Version 1.6**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -58,6 +58,17 @@ several is deterministic and stated; and a capability that deliberately stays si
 because a surface that silently replaces reads as one that accumulates until the day it loses
 something. Nothing else changed: the seams already held, which is why plurality arrived as a
 composite behind each one.
+
+**Version 1.6** brings the fleet under the same discipline as everything else. Other agents are a
+capability, reached the same three ways every capability is (§4.8) — a local folder of composition
+documents, an external registry, a host delegate — and a registered agent **materializes as a
+tool**, so a handoff is an act and the perimeter that governs acts governs handoffs, with nothing
+new to audit, advertise, or cancel. What a handoff shares is a template with a grounded default:
+the task, plus the user's actual ask — because "just enough context" is a decision the host must
+be able to make, not one the framework makes silently. And a third reply verb, `TRANSFER:` (§6.3),
+hands the **whole run** to a specialist whose answer is then delivered verbatim — governed by the
+one honesty rule that makes terminal handoffs safe: an ending that is not an answer **must never**
+be presented as one.
 
 ---
 
@@ -631,6 +642,25 @@ singular **MUST** document why — the same rule as an omitted mode, and for the
 silence is not a decision, it is a defect a host discovers by losing a source it believed it
 had.
 
+**The fleet.** Other agents are a capability like any other, and an implementation offering
+multi-agent flows **SHOULD** offer them the same three ways: a **Local** registry (a folder of
+composition documents, where the document surface exists — the document *is* the agent, its
+`name` the identifier a handoff calls, its `description` the advertisement), an **External**
+registry broker, and a **Custom** host delegate. Rules, each carrying the reason it exists:
+
+- A registered agent **MUST** materialize as a tool. This is the load-bearing decision: a handoff
+  is an act, so advertisement (the description opt-in, §6.1), authorization, approval, risk, the
+  decision log and cancellation all apply because they already applied to acts — a second code
+  path for "agent" beside "tool" is a second perimeter to erode.
+- Registered agents **accumulate** under the plural rule above; the first source to claim a name
+  keeps it, and a registry **MUST NOT** shadow a tool the host wired in code.
+- The default handoff **MUST** be grounded — the task the outer model wrote, plus the user's
+  original ask — and the sharing **MUST** be configurable by template, so the host decides what
+  crosses: the task alone, the task in context, or anything else the template names.
+- Where the document surface exists, identity **MUST** ride in the document, the fleet **SHOULD**
+  be declarable as data, and a member no handoff could ever call — an inline entry with no name —
+  **MUST** refuse to compose naming what is missing, under §4.8's composition-from-data rule.
+
 ### 4.9 The Perimeter (Full, OPTIONAL capabilities)
 
 §4.6 hardens what the agent *sends*. This section hardens what the agent *does* and what it
@@ -1060,6 +1090,34 @@ message going out and every reply coming back, exactly as on the text path) and 
 **MUST** behave identically. An implementation where a control holds on one protocol and not the
 other has not implemented this section; it has forked its agent.
 
+### 6.3 Transfer (Full — MAY)
+
+Where a fleet is registered (§4.8), an implementation **MAY** accept a third first-line verb:
+
+```
+TRANSFER: <agentName>
+TRANSFER: <agentName>: <task>
+```
+
+A transfer hands the **whole run** to the named agent: the Brain has recognized that the prompt,
+in whole, belongs to a specialist. Rules (MUST, for an implementation offering this):
+
+- The transfer **MUST** route through the same act pipeline as any tool call — §4.9's order
+  applies unchanged, with the agent's name as the act's name, so an allow-list can forbid a
+  transfer, an authority can hold one, and the decision log records one.
+- Absent a task after the name, the handoff **MUST** state the transfer's meaning as the task
+  (the reference text: `answer the user's request in full.`) rather than repeating the prompt —
+  the grounded template already carries the user's actual ask.
+- When the specialist's run ends **Responded**, the outer run **MUST** end with the specialist's
+  answer **verbatim** as its own answer — no synthesis turn, no rewriting — recorded to sessions
+  and telemetry exactly as any answer is.
+- Any other ending — refused, held, failed, out of turns — **MUST NOT** become the run's answer.
+  It stays a marked observation and the loop continues, because a refusal presented as the
+  user's answer is the dishonesty §3.1's statuses exist to prevent.
+- A bare `TRANSFER:` with no name behind it is protocol-parroting, read as prose — the same
+  guard §6.0 gives a nameless `ACTION:`. A guardian that emits `TRANSFER:` is overreach,
+  neutralized exactly as `FINAL:`/`ACTION:` overreach is (Invariant 6).
+
 ---
 
 ## 7. Invariants (MUST / MUST NOT)
@@ -1269,6 +1327,13 @@ other has not implemented this section; it has forked its agent.
 - [ ] Integrations accumulate — a second tool, remote tool server, or skill source adds, never
       silently replaces; routing across several is deterministic and stated; a deliberately
       singular capability documents why (§4.8)
+- [ ] **Full (optional):** the fleet — registered agents materialize as tools; a handoff is an
+      act the perimeter governs; the default handoff is grounded (the task plus the user's
+      original ask) and template-configurable; identity rides in the composition document, and a
+      nameless inline member refuses to compose naming what is missing (§4.8)
+- [ ] **Full (optional):** transfer — `TRANSFER:` routes through the act pipeline and ends the
+      run with the specialist's answer verbatim only when it Responded; any other ending stays a
+      marked observation and the loop continues (§6.3)
 
 ---
 

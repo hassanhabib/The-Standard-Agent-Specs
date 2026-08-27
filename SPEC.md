@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.6**
+**Version 1.7**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -69,6 +69,20 @@ be able to make, not one the framework makes silently. And a third reply verb, `
 hands the **whole run** to a specialist whose answer is then delivered verbatim — governed by the
 one honesty rule that makes terminal handoffs safe: an ending that is not an answer **must never**
 be presented as one.
+
+**Version 1.7** opens the seam an exposed agent was blocked on. An agent is configured once and
+asked many times — and until now everything was configured and nothing could be asked. §4.13 names
+**per-request inference**: a request may carry its own sampling values, its own response schema,
+an opaque provider passthrough, and tools the *caller* executes — under one rule that is the
+perimeter restated, **what is established and hard-configured takes precedence, always**, resolved
+once at the boundary so no tier below it ever learns that precedence exists. Two consequences are
+required because each closes a hole the reference implementation found: exactly one schema
+survives and seeds the wire and the validating guardian alike, so a model can never be constrained
+to one shape and validated against another; and every key the core writes on the wire is
+non-overridable through the passthrough, so an opaque bag cannot add a tool or beat a value
+precedence already resolved. Caller-declared tools are vocabulary, never capability — a call
+naming one is a terminal answer addressed to the caller, riding the same pending seam a held
+approval rides.
 
 ---
 
@@ -930,6 +944,102 @@ exist.
 
 ---
 
+### 4.13 Per-Request Inference (Full, OPTIONAL capability)
+
+An agent you *embed* is configured once and asked many times. An agent you *expose* serves many
+callers, each asking for something different, and each request carries its own inference options.
+This section is the seam between the two, and it is two edges, not a rebuild: values are resolved
+at the entry and carried by the context; the last hop hands them to the generator; every tier
+between is untouched.
+
+**The request and the resolution are different types.** A request (`PromptRequest`) is what one
+caller said: a prompt, an optional session id, and — every one optional, because "unset" **MUST**
+be representable — sampling values (`temperature`, `maxTokens`, `seed`, `stop`), a response schema,
+an opaque provider passthrough, and caller-declared tools. The resolution (`ResolvedInference`) is
+the output of precedence, and it is what rides the context: concrete sampling values, the one
+schema that survived, the sanitized passthrough, the caller tools that kept their names. The raw
+request **MUST NOT** travel below the entry. This is not style: a tier that can see a value
+precedence discarded is a tier that can act on it, and the guarantee becomes a rule someone can
+forget instead of a shape nobody can misuse.
+
+**Precedence.** Per field: **configured → request → framework default**, resolved once at the top
+of the run and never again below it — a loop that can re-resolve is a loop where two turns of one
+run can disagree.
+
+- What is established and hard-configured takes precedence, **always**. A caller can never widen
+  the boundary the deployment set: not a budget, not a tool, not a schema, not a sampling value
+  the deployment chose. Configuration is a ceiling, not a suggestion.
+- "Configured" **MUST** mean *explicitly* configured. An implementation **MUST** be able to
+  distinguish a value the host chose from a default the host never expressed an opinion about —
+  otherwise per-request values can never take effect and the rule silently reads "defaulted wins".
+  The framework default is the third rung, applied by the resolution and by nothing below it.
+- A request whose value was discarded because configuration won **SHOULD** be told so in the
+  trace. A caller who sent a schema and got a differently-shaped answer deserves the same
+  courtesy the guardians already extend (§4.7).
+
+**One schema survives.** When the deployment configured an output contract, the request's schema
+is discarded — never merged, never partially honored. When it did not, the request's schema is the
+survivor. Either way the surviving schema **MUST** seed both the wire (as the provider's response
+format, where supported) and the validating guardian — because plenty of engines accept a response
+format and quietly ignore it, and a schema that only reached the wire would be weaker than a
+configured one for no reason. The dangerous state — a model constrained to schema A and validated
+against schema B, looping on revision against a shape it was never given — **MUST** be unreachable.
+
+**The passthrough is inference-shaping only.** What the core cannot model it carries opaquely —
+an engine's template arguments, a provider's thinking options, a local engine's grammar. The bound
+is only real if the merge enforces it: every key the core itself writes on the wire (the model,
+the messages, the tools, the response format, the sampling values, the stream flag) is
+**non-overridable** — a colliding key **MUST** be stripped, and the strip **SHOULD** be logged.
+The modeled field wins because the modeled field is the one precedence was applied to; a raw key
+that could beat it would be a second resolution path with no ceiling. Stripping at the boundary is
+the stronger placement: then no generator, first-party or third, can ever be handed a passthrough
+carrying a core-owned key.
+
+**Caller tools are vocabulary, never capability.** In the exposed protocol the server never
+executes a caller's tool: the model names one, the call is returned, and the caller executes it
+and posts the result back. Accordingly:
+
+- Caller-declared tools are advertised to the Brain beside the configured tools, on both reply
+  protocols — words the model may answer with.
+- There **MUST NOT** be a path from the request's tool list to the execution registry. A call
+  naming a caller tool is a **terminal answer addressed to the caller**: the run ends
+  `AwaitingInput`, and the call itself rides out as the session's pending effect (§4.11), the
+  same seam a held approval rides — so a different process can hand the caller the act rather
+  than only the news that something is waiting. The caller posts the result on the session, and
+  the run resumes as any awaited input resumes.
+- A caller tool that shares a configured tool's name **MUST** be dropped, before anything
+  downstream reads the list, and the drop **SHOULD** be logged. Configured wins, unambiguously: a
+  caller cannot shadow the deployment's own tool, and a call carrying that name has exactly one
+  meaning — the configured tool, executed locally, under every configured control.
+- Everything else a request might wish for — tools the agent executes, permissions, budgets,
+  approvals — is deliberately **absent from the request type**. A request has no field in which
+  to ask, which is a stronger guarantee than a rule.
+
+**The generator contract widens additively.** The request-carrying calls are additions with
+defaults that degrade to the plain calls, so every existing generator keeps compiling and opts in
+on its own schedule. A generator that has not opted in **MUST** degrade gracefully: the resolved
+options are ignored at the wire and the answer is still held to shape, because the validating
+guardian runs regardless — constrained decoding is an optimization over a guarantee the
+architecture already provides. The generator **SHOULD** expose whether it honors requests, so the
+trace can say which of the two happened. Decorating generators (redaction, retry, recording)
+**MUST** forward the request-carrying calls explicitly — a decorator that leans on the contract's
+default degrades at the decorator and silently drops the options before the wire.
+
+**Both doors.** The streamed loop **MUST** carry the same resolved options the batched one does,
+and **MUST** hold the streamed answer to the same surviving schema. A control a caller can step
+around by changing method is not a control (§7.6).
+
+**The criterion.** One composed agent instance **MUST** serve concurrent requests carrying
+different values — different schemas, different temperatures — with one composition, each run
+keeping its own resolution. Rebuilding the agent per request and mutating a shared instance per
+request are both non-conformant answers to this section.
+
+**Neutrality.** A plain prompt is a request that expressed no opinions — one path, not a simple
+mode and an advanced one. An agent that is never handed a request behaves exactly as if this
+section did not exist.
+
+---
+
 ## 5. The Loop (normative algorithm)
 
 ```
@@ -1256,6 +1366,19 @@ in whole, belongs to a specialist. Rules (MUST, for an implementation offering t
 - [ ] One instance serves concurrent prompts; run identity and counters are per invocation, never
       per instance, so no run corrupts another's record (§4.4, §7.4)
 - [ ] Reply protocol: first-line ACTION, terminal ReturnResponse / Refuse (§6)
+- [ ] **Full (optional):** per-request inference resolves configured → request → framework default
+      once at the boundary; hard-configured always wins and is distinguishable from a default the
+      host never chose (§4.13)
+- [ ] **Full (optional):** exactly one response schema survives precedence and seeds the wire AND
+      the validating guardian; a generator that has not opted in degrades to the guardian alone
+      (§4.13)
+- [ ] **Full (optional):** every core-owned wire key is non-overridable through the provider
+      passthrough; collisions are stripped and logged (§4.13)
+- [ ] **Full (optional):** caller-declared tools are vocabulary, never capability — a call naming
+      one ends the run AwaitingInput with the call riding the session as its pending effect, and a
+      name collision with a configured tool drops the caller's (§4.13, §4.11)
+- [ ] **Full (optional):** one composition serves concurrent heterogeneous requests, each run
+      keeping its own resolution (§4.13)
 - [ ] **Full:** guardians (Gate/Judge) distinct from the Brain; guardian output that answers or
       acts is neutralized, not obeyed (§7.6)
 - [ ] **Full:** a rejecting Judge returns a reason, fed back into observations as revision

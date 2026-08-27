@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.7**
+**Version 1.8**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -83,6 +83,18 @@ non-overridable through the passthrough, so an opaque bag cannot add a tool or b
 precedence already resolved. Caller-declared tools are vocabulary, never capability — a call
 naming one is a terminal answer addressed to the caller, riding the same pending seam a held
 approval rides.
+
+**Version 1.8** closes the two gaps the first exposed consumer found in §4.13 — a stateless
+OpenAI-compatible endpoint, where the client owns the transcript and there is no session store.
+Both were found by building, which is this document's test working as designed. The pending call
+now **must** ride the run's outcome as well as the session, carrying the id the model minted —
+because an exposer that cannot reach the pending call cannot yield it, and the yield is the whole
+mechanism. And the request now carries the **caller-owned transcript** — prior turns and executed
+tool exchanges — because a stateless caller re-posts the conversation and a run that cannot
+receive it starts from nothing every time; when a session exists it wins, the same precedence
+every request field obeys. One ruling is recorded rather than built: parallel caller tool calls
+stay one-per-run, a deliberate constraint an implementation may enforce at its decider, and a
+named future widening.
 
 ---
 
@@ -1003,10 +1015,16 @@ and posts the result back. Accordingly:
   protocols — words the model may answer with.
 - There **MUST NOT** be a path from the request's tool list to the execution registry. A call
   naming a caller tool is a **terminal answer addressed to the caller**: the run ends
-  `AwaitingInput`, and the call itself rides out as the session's pending effect (§4.11), the
-  same seam a held approval rides — so a different process can hand the caller the act rather
-  than only the news that something is waiting. The caller posts the result on the session, and
-  the run resumes as any awaited input resumes.
+  `AwaitingInput`, and the call itself rides out on **both** seams — as the session's pending
+  effect (§4.11), so a different process can hand the caller the act, and on the run's
+  **outcome**, so a stateless deployment with no session store can yield it at all. The pending
+  call **MUST** carry the id the model minted, because the exposed protocol requires the
+  caller's result to answer that id; an id the exposer invents is one the caller cannot match.
+- An implementation **MAY** constrain its decider to one tool call per turn
+  (`parallel_tool_calls: false` where the provider speaks it); several calls then hand back one
+  run at a time. Plural pending caller-calls are a permitted future widening — they are yield,
+  not acts, so returning several widens no perimeter — but an implementation claiming this
+  section is not required to support them.
 - A caller tool that shares a configured tool's name **MUST** be dropped, before anything
   downstream reads the list, and the drop **SHOULD** be logged. Configured wins, unambiguously: a
   caller cannot shadow the deployment's own tool, and a call carrying that name has exactly one
@@ -1033,6 +1051,14 @@ around by changing method is not a control (§7.6).
 different values — different schemas, different temperatures — with one composition, each run
 keeping its own resolution. Rebuilding the agent per request and mutating a shared instance per
 request are both non-conformant answers to this section.
+
+**The caller-owned transcript.** The exposed protocols are stateless: the client re-posts the
+conversation, prior tool results included. The request therefore carries the transcript — prior
+turns, oldest first, and executed tool exchanges still naming their call ids — and a run **MUST**
+receive it: turns render into the conversation on both reply protocols exactly as a session's
+history would, and a replayed exchange returns to the model as a tool message answering the call
+it answers. When a session exists it **MUST** win — the deployment's record of the conversation
+beats the caller's retelling of it, the same precedence every field on the request obeys.
 
 **Neutrality.** A plain prompt is a request that expressed no opinions — one path, not a simple
 mode and an advanced one. An agent that is never handed a request behaves exactly as if this
@@ -1375,8 +1401,12 @@ in whole, belongs to a specialist. Rules (MUST, for an implementation offering t
 - [ ] **Full (optional):** every core-owned wire key is non-overridable through the provider
       passthrough; collisions are stripped and logged (§4.13)
 - [ ] **Full (optional):** caller-declared tools are vocabulary, never capability — a call naming
-      one ends the run AwaitingInput with the call riding the session as its pending effect, and a
-      name collision with a configured tool drops the caller's (§4.13, §4.11)
+      one ends the run AwaitingInput with the call riding the session's pending effect AND the
+      run's outcome, carrying the model-minted call id; a name collision with a configured tool
+      drops the caller's (§4.13, §4.11)
+- [ ] **Full (optional):** the request carries the caller-owned transcript — prior turns and
+      executed tool exchanges — and the run receives it on both reply protocols; a session,
+      when one exists, wins (§4.13)
 - [ ] **Full (optional):** one composition serves concurrent heterogeneous requests, each run
       keeping its own resolution (§4.13)
 - [ ] **Full:** guardians (Gate/Judge) distinct from the Brain; guardian output that answers or

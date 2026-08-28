@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.10**
+**Version 1.11**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -120,6 +120,17 @@ same outcome the batched door returns — one run, two readings, and never a cho
 answer's structure and the run's story. This section is also where the oldest repo-local
 invariant becomes normative: concatenating the stream's answer events equals the outcome's
 result.
+
+**Version 1.11** separates what an agent carries from what a run is offered. The day live
+narration shipped, production showed a greeting running a web search six times — not because
+the model needed it, but because the turn was shown it: advertisement was composition-scoped
+and turn-blind, so every capability the agent carried reached every run, at token cost that
+scales with the catalog and a judgment burden weak deciders fail. §4.15 names **selection**:
+per run, a host-supplied selector names the subset of described capabilities the run is
+offered — narrowing the offering only, never the perimeter; recorded in the decision log;
+identical on every door; ignored entirely when no selector is configured. "Hello" is offered
+nothing, and an agent carrying twenty tool servers no longer puts twenty catalogs in front of
+a greeting.
 
 ---
 
@@ -1121,6 +1132,43 @@ Requirements (**MUST**, for an implementation claiming this capability):
 
 An implementation that offers only a batched loop, or only a streamed loop, is unaffected by
 this section.
+
+### 4.15 Selection (Full, OPTIONAL capability)
+
+What an agent **carries** and what a run is **offered** are different things, and an
+implementation that conflates them pays twice as the catalog grows. An agent composed with many
+capabilities — tools, remote tool servers, skills — advertises all of them to every run: every
+turn spends tokens describing capabilities it will not use, and the deciding model shoulders a
+judgment burden it will sometimes fail — a model offered a tool will sometimes act on it
+because it was shown, not because the task needs it. A greeting must not search the web; an
+agent carrying twenty tool servers must not put twenty catalogs in front of "Hello".
+
+Selection separates carrying from offering: **per run**, a selector — supplied by the host as
+configuration — names the subset of the agent's described capabilities the run is offered. The
+Brain then decides among what was offered, exactly as before; selection shapes the offering,
+never the decision.
+
+Requirements (**MUST**, for an implementation claiming this capability):
+
+- Selection **narrows the offering only**. It **MUST NOT** widen the perimeter, grant
+  permission, or make anything callable that was not: an unselected tool is treated exactly as
+  an undescribed tool (§6.1) — reachable if the Brain names it, governed by the same perimeter,
+  never offered.
+- The selector's output is a **classification** — a set of names, never content. Names the
+  agent does not carry **MUST** be ignored, and an empty selection is a valid selection: the
+  run is offered nothing.
+- The selection **MUST** be recorded in the decision log — what was offered and what was
+  withheld — because a review of a run that lacked a capability must see that it was withheld
+  by selection rather than missing from the agent.
+- Selection **MUST NOT** touch what the run's caller declared: caller tools (§4.13) are the
+  caller's own vocabulary. And it **MUST** apply identically on every door of the loop (§7.6).
+- Absent a selector, every described capability is offered — the unamended behavior. An
+  implementation without this capability is unaffected by this section.
+
+The selector is the host's judgment: a rule, a keyword table, an embedding index, a cheap
+classifier. It **MAY** be a model; its output is still read only as names. The same principle
+extends to skills — offering a run only the instructions relevant to its task — and a future
+revision may make that half normative once the reference implementation has built it.
 
 ---
 

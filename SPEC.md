@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.8**
+**Version 1.9**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -95,6 +95,19 @@ receive it starts from nothing every time; when a session exists it wins, the sa
 every request field obeys. One ruling is recorded rather than built: parallel caller tool calls
 stay one-per-run, a deliberate constraint an implementation may enforce at its decider, and a
 named future widening.
+
+**Version 1.9** gives the run a voice. §6.0 gains **narration**: at most one `SAY:` line before
+the choice — user-voiced progress prose ("Let me check the web…"), peeled before the first-line
+rule so the act still runs, and voiced on a typed channel of its own, distinct from machine-voiced
+status and from the unvetted draft. Tools may declare narration templates as a floor for turns
+where the model offered none, and the provider-native contract carries the same prose as a field
+on the structured result. One rule makes the channel safe, and it is Invariant 5 restated:
+narration is user-visible output, so it is **screened by the Gate before it is voiced** — a
+refused narration is withheld from every channel, never echoed as a notice, and recorded in the
+decision log. The prose never enters the answer, the observations, or the session's history: it
+is voiced, then it dies with its turn. An implementation that does not support narration remains
+conformant; the `SAY:` line then reads as the reply's first line under the unamended rules —
+which is also the honest description of what every implementation did before this section existed.
 
 ---
 
@@ -1097,6 +1110,9 @@ mechanism (**MAY**).
 
 - To act: a single line — `ACTION: <toolName>: <input>`
 - To answer: `FINAL: <answer>`
+- To narrate (**MAY**): at most **one** line before the choice line — `SAY: <prose>` —
+  progress narration voiced to the user ("Let me check the web…"). Narration is never the
+  answer and never a tool call.
 
 Parsing (MUST):
 - A tool call **MUST** be read from the **first line only** (models often emit extra lines).
@@ -1104,6 +1120,23 @@ Parsing (MUST):
 - `directionType == "ReturnResponse"` is terminal → `Responded`.
 - `directionType == "Refuse"` is terminal → `Refused`.
 - Any other `directionType` is a tool name, routed by Direction (§4.3).
+
+Narration (MUST, for an implementation that supports it):
+- At most one leading `SAY:` line **MUST** be peeled before the first-line rule above is
+  applied; a tool call is then read from the first line **after** it. A second `SAY:` line is
+  not narration — it is part of the reply.
+- The peeled prose **MUST NOT** enter the answer, the observations, or the session history
+  (§4.11).
+- Narration is user-visible output and **MUST** be screened before it is emitted (Invariant 5,
+  §4.9); screening **MUST** reuse the Gate. A refused narration **MUST** be withheld — not
+  voiced, not echoed as a notice — and the refusal **MUST** be recorded in the decision log
+  (§4.7).
+- Tools **MAY** declare narration templates as a floor for turns where the model offered none;
+  a model-authored `SAY:` takes precedence for that turn's pre-act narration.
+- On the provider-native contract (§6.2), the same prose **MAY** ride the structured result as
+  a narration field, subject to the same rules.
+- An implementation that does not support narration remains conformant to this section; a
+  `SAY:` line then reads as the reply's first line under the unamended rules above.
 
 ### 6.1 Structured tool-calls (Full — MAY)
 
@@ -1268,7 +1301,8 @@ in whole, belongs to a specialist. Rules (MUST, for an implementation offering t
    holds no state between prompts, one instance **MUST** also serve prompts *concurrently*
    without runs observing or overwriting one another (§4.4).
 5. **A draft is not a commitment.** Where a guardian applies, output **MUST NOT** cross a
-   boundary un-vetted.
+   boundary un-vetted. Narration (§6.0) is an instance: user-voiced prose crossing to the
+   caller is vetted by the Gate before it is voiced.
 6. **No self-certification.** A guardian (Gate/Judge) **MUST NOT** be the Brain. A faculty
    **MUST NOT** certify its own trustworthiness. Guardian output that attempts to *answer* or
    *act* (rather than screen or score) **MUST** be neutralized — treated as a non-authoritative

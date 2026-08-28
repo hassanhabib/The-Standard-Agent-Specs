@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.9**
+**Version 1.10**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -108,6 +108,18 @@ decision log. The prose never enters the answer, the observations, or the sessio
 is voiced, then it dies with its turn. An implementation that does not support narration remains
 conformant; the `SAY:` line then reads as the reply's first line under the unamended rules —
 which is also the honest description of what every implementation did before this section existed.
+
+**Version 1.10** closes the capability seam narration exposed the moment it shipped. The loop's
+two doors held every control equally (§7.6) but not every capability: the batched door returned
+the structured outcome and discarded the run's events; the streamed door yielded the events and
+lost the outcome — so the first production consumer, needing the pending call's model-minted id,
+ran batched and watched five narration lines land in one lump with the answer, twenty-seven
+seconds in. §4.14 names **the streamed outcome**: an implementation offering both doors **MUST**
+offer a streamed run whose enumeration yields every event live and whose completion carries the
+same outcome the batched door returns — one run, two readings, and never a choice between the
+answer's structure and the run's story. This section is also where the oldest repo-local
+invariant becomes normative: concatenating the stream's answer events equals the outcome's
+result.
 
 ---
 
@@ -1076,6 +1088,39 @@ beats the caller's retelling of it, the same precedence every field on the reque
 **Neutrality.** A plain prompt is a request that expressed no opinions — one path, not a simple
 mode and an advanced one. An agent that is never handed a request behaves exactly as if this
 section did not exist.
+
+### 4.14 The Streamed Outcome (Full, OPTIONAL capability)
+
+An implementation **MAY** offer two doors into the one loop: a batched run that returns the
+structured outcome — status, result, and any pending effect with its model-minted call id — and
+a streamed run that yields the run's events as they happen. Every control already binds both
+doors (§7.6). This section binds their **capabilities**: an implementation that offers both
+**MUST** also offer a streamed run whose completion carries the structured outcome.
+
+The reason is the seam that opens without it. A caller that needs the outcome — every exposer
+that yields a pending call back to its own caller does — is otherwise forced onto the batched
+door, where the run's events are produced and discarded; a caller that wants the events loses
+the outcome. A capability a caller can only have by giving up another splits consumers into two
+kinds the loop was built not to have. The streamed outcome ends the choice: one enumeration,
+every event live, and the same outcome at the end.
+
+Requirements (**MUST**, for an implementation claiming this capability):
+
+- The streamed run is an enumeration of the run's events that, once the enumeration completes,
+  exposes the **same structured outcome** the batched door returns for the same run — status,
+  result, and the pending effect carrying the model-minted call id (§4.13).
+- Concatenating the enumeration's answer events equals the outcome's result. The stream and the
+  outcome are two readings of one run, never two runs and never two answers.
+- The outcome is a completion product: it is defined when the enumeration ends — normally or by
+  the run's own termination — and an implementation **MUST NOT** require reading it mid-stream.
+- Every control, every guardian, and every decision-log record **MUST** be identical across all
+  doors of the loop (§7.6, Invariant 6). The streamed outcome adds a reading, not a path: an
+  implementation **MUST NOT** fork the loop to provide it.
+- Screened channels remain screened: an event that a guardian withholds on one door (§6.0
+  narration) is withheld on every door.
+
+An implementation that offers only a batched loop, or only a streamed loop, is unaffected by
+this section.
 
 ---
 

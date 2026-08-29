@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.11**
+**Version 1.12**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -131,6 +131,17 @@ offered — narrowing the offering only, never the perimeter; recorded in the de
 identical on every door; ignored entirely when no selector is configured. "Hello" is offered
 nothing, and an agent carrying twenty tool servers no longer puts twenty catalogs in front of
 a greeting.
+
+**Version 1.12** closes the gap §4.15 left open by design and production found within a day.
+Selection governs what a run is *shown*, and a Brain the loop fully mediates can only call
+what it was shown — but a Brain is configuration, and configuration can carry side-channel
+knowledge of the catalog: a custom brain, a gateway, a model router. The reference deployment
+watched exactly that — a routing brain advertised the full catalog to its backend, and a
+greeting kept searching the web *after* selection was live. §4.15 now names **enforced
+selection**, an opt-in mode under which the offering also binds at the Direction perimeter:
+an act naming an advertised tool the run was not offered is denied — told, non-terminal,
+recoverable, exactly as a policy denial is. Off by default; caller tools and undescribed
+tools keep their treatment; with no selector there is nothing to enforce.
 
 ---
 
@@ -1153,7 +1164,8 @@ Requirements (**MUST**, for an implementation claiming this capability):
 - Selection **narrows the offering only**. It **MUST NOT** widen the perimeter, grant
   permission, or make anything callable that was not: an unselected tool is treated exactly as
   an undescribed tool (§6.1) — reachable if the Brain names it, governed by the same perimeter,
-  never offered.
+  never offered. This is the default treatment; a host may make the offering binding by opting
+  into enforcement below.
 - The selector's output is a **classification** — a set of names, never content. Names the
   agent does not carry **MUST** be ignored, and an empty selection is a valid selection: the
   run is offered nothing.
@@ -1169,6 +1181,23 @@ The selector is the host's judgment: a rule, a keyword table, an embedding index
 classifier. It **MAY** be a model; its output is still read only as names. The same principle
 extends to skills — offering a run only the instructions relevant to its task — and a future
 revision may make that half normative once the reference implementation has built it.
+
+**Enforced selection (opt-in).** The narrowing above governs what a run is *shown*; it cannot
+govern what a Brain already knows. A Brain the loop fully mediates can only call what it was
+offered, but a Brain is configuration — a custom brain, a gateway, a model router — and
+configuration can carry side-channel knowledge of the catalog. An implementation **MAY**
+therefore offer an enforcement mode, **off by default**, under which the offering also binds
+at the Direction perimeter (§4.9): an act naming an *advertised* tool the run was not offered
+is denied — told, non-terminal, recoverable, exactly as a policy denial is — and the denial
+is recorded in the decision log. Under enforcement:
+
+- Caller tools (§4.13) **MUST** never be denied by selection: they are the caller's own
+  vocabulary, classified before the perimeter.
+- An undescribed tool (§6.1) **MUST** keep its treatment: a name selection never saw is not
+  selection's to withhold.
+- With no selector configured there is no offering, and enforcement **MUST** change nothing.
+- Enforcement **MUST NOT** widen anything: it composes with permission, approval and run-once,
+  and a denial here happens before an act's intent is ever recorded.
 
 ---
 

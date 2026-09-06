@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.12**
+**Version 1.13**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -143,6 +143,19 @@ an act naming an advertised tool the run was not offered is denied — told, non
 recoverable, exactly as a policy denial is. Off by default; caller tools and undescribed
 tools keep their treatment; with no selector there is nothing to enforce.
 
+**Version 1.13** closes a seam that neither §4.11 nor §6.2 owned, and which therefore went
+uncertified by both. A `Turn` was a prompt and an answer, so the calls a turn made were dropped
+the moment the turn was recorded. Each section worked alone; the pair lost the work. Two failures
+follow from the one missing field. A session forgets what it already *did*, so an agent is asked
+whether to repeat an act while blind to having performed it. And a caller on a stateless protocol
+(§4.13) has nowhere to put a finished call but the request's own in-flight exchange list, where the
+model is handed it as evidence for the prompt being asked *now* — the reference deployment watched
+an editor client report a file edited on every follow-up, because an edit from the first turn was
+replayed under the second turn's prompt, and the model reported the evidence it was given. `Turn`
+now carries its `exchanges`; §4.11 requires them recorded and recalled with the turn; and §6.2's
+attribution rule now spans turns, so a past turn's calls replay *inside* that turn rather than
+after the current prompt.
+
 ---
 
 ## 1. Conformance
@@ -240,8 +253,16 @@ record AgentContext {
 }
 
 record Turn {
-  prompt : Text
-  answer : Text
+  prompt    : Text
+  answer    : Text
+  exchanges : List<Exchange>   // DATA: the calls this turn made, oldest first (§4.11, §6.2)
+}
+
+record Exchange {
+  callId    : Text
+  toolName  : Text
+  arguments : Text             // as JSON
+  result    : Text
 }
 ```
 
@@ -924,7 +945,7 @@ discards the context needed to use the answer. An implementation offering `Await
 ```
 record Session {
   id      : Text
-  history : List<Turn>
+  history : List<Turn>       // each turn carries its own calls (§3.2)
   status  : AgentStatus      // what the session was left in the middle of
   pending : AgentEffect?     // an effect awaiting approval, if any (§4.9)
   runId   : Text             // the run that last worked this session (see Run continuity)
@@ -939,6 +960,12 @@ record Session {
   than the last, without limit.
 - A completed prompt **MUST** be appended to the session before the call returns, so the next
   prompt sees it. A prompt that failed or was cancelled **MUST NOT** be recorded as an answer.
+- A turn **MUST** record the calls it made and their results alongside its answer, and Recall
+  **MUST** load them with it. A turn is not only what was said; it is what the agent did in order
+  to be able to say it. A history that keeps the answer and drops the call that produced it tells
+  the next prompt that the agent answered and never how — and an implementation offering both this
+  section and §6.2 while dropping the calls has built a conversation that cannot remember its own
+  acts, which is the worst place to decide whether to repeat one (§4.9).
 
 **Resumption.**
 - A session left in `AwaitingInput` or `AwaitingApproval` **MUST** be resumable: a later prompt
@@ -1369,6 +1396,13 @@ than as prose does not widen what the Brain may reach for.
   guessing native tool calling exists to remove.
 - Ids are the provider's or the implementation's to mint, and are **not** the idempotency key of
   §4.9. A model may reuse or vary an id; run-once **MUST NOT** depend on one.
+- Attribution **MUST** hold *across* turns as well as within one. A past turn's calls belong
+  inside that turn — after the prompt that asked for them, before the answer they produced — and
+  **MUST NOT** be flushed after the current prompt. A finished call replayed in the current turn's
+  position is read as evidence for the prompt being asked now, which is how an act completed
+  earlier is reported as one just performed. Where the conversation is held by the caller (§4.13),
+  the request's own exchange list is *this* turn's in-flight work and **MUST NOT** carry a past
+  turn's calls; those travel on the turn (§3.2).
 
 **One act per turn.** A provider may return several calls at once. Direction performs acts one at a
 time, because authorization, approval and run-once are judgments about a *single* act (§4.9). An

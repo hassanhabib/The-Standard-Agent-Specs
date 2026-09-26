@@ -1024,10 +1024,11 @@ calling one that is failing.
   returning an empty or fabricated result is worse than an error, because the caller cannot tell.
 - Health tracking **MUST NOT** change any verdict or result while the primary is healthy.
 - A provider that did not answer at all (a refused connection, a name that resolves to nothing, a
-  request that never left the machine) **MUST** be reported as unreachable, naming where the
-  implementation tried. It **MUST NOT** be reported as an internal fault to take to support: the
-  person's next step is the address and whatever should be listening at it. The native fault
-  **SHOULD** be kept beside it for whoever investigates.
+  request that never left the machine) **MUST** be reported as unreachable. It **MUST NOT** be
+  reported as an internal fault to take to support: the person's next step is the address and
+  whatever should be listening at it. The report **SHOULD** name where the implementation tried
+  when the layer that failed knows it, and the native fault **SHOULD** be kept beside it for
+  whoever investigates.
 
 **Guardian efficiency.** Screening the same unchanged input on every turn is waste, not safety.
 
@@ -1768,8 +1769,8 @@ in whole, belongs to a specialist. Rules (MUST, for an implementation offering t
       report their own failure code beside their status (§3.6, §4.10)
 - [ ] **Full (optional):** an unhealthy provider degrades to a configured alternative rather than
       failing, and an implementation with no alternative fails rather than fabricates; a provider
-      that did not answer at all is reported as unreachable at its address, never as a fault to take
-      to support (§4.10)
+      that did not answer at all is reported as unreachable, never as a fault to take to support
+      (§4.10)
 - [ ] Retrieval ranks by relevance and returns the best rather than the first found; a natural
       question retrieves the passage that answers it (§4.2)
 - [ ] **Full (optional):** what Recall injects is bounded across skills, memories and knowledge

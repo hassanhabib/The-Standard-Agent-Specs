@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.15**
+**Version 1.16**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -176,6 +176,14 @@ was a clock. A local model that thinks for four minutes and a paid one that spen
 tokens looked the same until each ended. §4.14.1 puts the count the budget reads on the stream,
 after every model call, as a running total marked estimated or reported the way §3.4 already
 requires. Nothing about the count changed; it is now said out loud.
+
+**Version 1.16** lets the count move while a call is answered. A usage event arrives when a call
+ends, and the first person to watch one found a count standing still for a minute while a model
+wrote: the prompt had been spent the moment the call was sent, and the file the model was writing
+into a tool call's arguments arrived in pieces nobody counted until the last one. §4.14.1 now
+permits **spending events** between sending a call and its usage event: the run's total so far
+plus this call's estimate, always marked estimated, a separate kind from the usage event, and
+never what the budget bounds. Optional, and invisible to a consumer that reads only usage events.
 
 ---
 
@@ -1310,6 +1318,24 @@ Requirements (**MUST**, for an implementation that yields a run's events and acc
 - A usage event is neither an answer nor narration. It **MUST NOT** be concatenated into the
   result (§4.14) and **MUST NOT** enter the observations or the session history (§4.11).
 - It is emitted identically on every door that yields events (§7.6, Invariant 6).
+
+**Spending, while a call is answered (MAY).** A usage event arrives when a call ends, and a call
+can take minutes: a coding turn on somebody's own hardware, or a model writing a whole file into a
+tool call's arguments. The prompt was spent the moment the call was sent. An implementation that
+streams its calls **MAY** carry **spending events** between sending a call and that call's usage
+event, so a person watching sees the count move while the call is answered:
+
+- A spending event's record is the run's usage so far (the last usage event's total, or nothing
+  before the first) plus this call's own count of what it sent and of what has come back so far.
+  `isEstimated` is always true: nothing has been reported yet.
+- Its text is that total as a decimal integer, as a usage event's is.
+- It is a separate kind from the usage event and is never the count the budget bounds. The call's
+  usage event that follows supersedes it, and **MAY** be lower when the provider reports less than
+  was estimated.
+- Like a usage event, it is neither an answer nor narration.
+
+An implementation that carries no spending events is conformant; a consumer that reads only usage
+events reads exactly what it read before they existed.
 
 ### 4.15 Selection (Full, OPTIONAL capability)
 

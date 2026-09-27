@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.13**
+**Version 1.14**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -156,6 +156,19 @@ now carries its `exchanges`; §4.11 requires them recorded and recalled with the
 attribution rule now spans turns, so a past turn's calls replay *inside* that turn rather than
 after the current prompt.
 
+**Version 1.14** makes a run know what it has already done, and say so. Version 1.13 required a
+re-proposed act to be replayed within a run with no exception, so a model that edited a file and read
+it back was handed the file as it was before the edit; both reference implementations did exactly
+that. §4.9 now makes a look at a scope the run has since written to a new act, counted from what the
+run performed on every protocol, and says how a replay is told: whole, with a note that it already
+ran, and never as a note pointing at an answer the Brain can no longer see. §3.2's `Exchange` records
+whether the ledger answered it. §4.10 adds a repetition bound that counts replays only and stops a
+run going in circles, and §3.6 gives every stop without an answer a code, so a caller can tell
+"cancelled" from "out of budget" from "out of turns" from "going in circles" without reading a
+sentence. §6.2 describes trimming a long conversation, which the TypeScript implementation has done
+since before this version and which this document never mentioned. And §4.10 says a provider that
+did not answer at all is unreachable at an address, not a fault to take to support.
+
 ---
 
 ## 1. Conformance
@@ -263,9 +276,14 @@ record Exchange {
   toolName  : Text
   arguments : Text             // as JSON
   result    : Text
+  replayed  : Bool             // answered from the run-once ledger, not performed (§4.9)
 }
 ```
 
+- `replayed` **MUST** be true exactly when the ledger answered the call rather than the tool, and
+  **MUST** default to false, so an exchange recorded before this field existed reads as a call that
+  ran. A loop that counts a run's repeated asks (§4.10) has to tell the two apart: a read after an
+  edit is the same ask and is not a repeat.
 - Context updates **MUST** be copy-on-write: a nature returns an updated copy; a nature
   **MUST NOT** mutate a shared instance. (Use records/immutable structs; if unavailable,
   a copy helper or builder.)
@@ -381,6 +399,38 @@ record AuditRecord {
 - `runId` **MUST** be unique per invocation and **MUST NOT** be reused across prompts.
 - `sequence` **MUST** be per-run, not global, so a run remains reconstructible from an
   interleaved sink.
+
+### 3.6 Failure (OPTIONAL capability, §4.10)
+
+Why a run stopped without delivering an answer, for the caller that decides what to do next by
+switching on a code rather than by reading a sentence.
+
+```
+enum FailureCategory { Validation, DependencyValidation, Dependency, Service }
+
+record Failure {
+  category : FailureCategory
+  code     : Text             // one of the codes below, or an implementation's own
+  message  : Text             // the sentence a person is shown
+}
+```
+
+| Code | The run stopped because |
+|---|---|
+| `cancelled` | the caller cancelled it (§4.10) |
+| `budget_exhausted` | a token, cost or wall-clock budget ran out (§4.10) |
+| `turns_exhausted` | it reached `MAX_TURNS` still working (§5) |
+| `going_in_circles` | it kept asking for an act the ledger had already answered (§4.10) |
+
+- An implementation that stops a run for one of these reasons **MUST** report the failure with its
+  code, beside the status it already reports. A status says *that* a run did not answer; the code
+  says *why*, and a caller cannot tell "retry this" from "change the prompt" without it.
+- `message` **MUST** be the same sentence the run's result carries, so a caller reading either one
+  is told the same thing.
+- An implementation **MAY** report codes of its own for stops this table does not name. It **MUST
+  NOT** reuse one of these codes for a different reason.
+- A run that answered, asked, refused or is waiting for approval **MUST NOT** carry a failure: none
+  of those is a stop without an answer.
 
 ---
 
@@ -798,11 +848,43 @@ Direction **MUST** apply the following order, and **MUST NOT** reorder it:
   something *again*, so an implementation offering either **MUST** offer run-once for
   `Irreversible` effects, or it has built two ways to pay a wire transfer twice.
 
+**A look after a change is a new question.** The ledger remembers what an act produced and replays
+it for the rest of the run, which is right for an act and wrong for a look at something an act has
+since changed.
+
+- A `Safe` effect with a non-empty `scope` that this run has written to since (a performed effect
+  that is not `Safe`, with the same `scope`) **MUST** derive a key that tells it apart from the same
+  look before the write, at minimum by counting those writes. It runs, and a second identical look
+  after the same write replays as before.
+- An effect that is not `Safe` **MUST** keep its key exactly. A transfer proposed twice is one
+  transfer, whatever else happened in between.
+- The count **MUST** be taken from what the run performed, on every protocol. An implementation
+  that counts only native exchanges (§6.2) leaves the text protocol replaying the file as it was
+  before the edit, which §6.2's last paragraph forbids.
+
+> Watched in both reference implementations: a model edited a file and read it back to check its
+> edit, and was handed the file as it was before the edit, because the read had the same tool and
+> the same arguments as the read before it. Version 1.13 required exactly that, since it said a
+> re-proposed act is replayed with no exception for a look at something the run itself changed.
+
+**How a replay is told.** A replay is the first outcome, and the Brain has to be able to tell that
+it is one.
+
+- A replayed outcome **MUST** reach the Brain whole, followed by a note saying the act already ran
+  in this run with these arguments and was not performed again. Handed back bare, it reads as a fresh
+  answer to a fresh ask, and a model that asked because it did not have what it wanted asks again.
+- From the third identical ask in a run on, an implementation **MAY** answer with the note alone,
+  saying that the answer was given earlier and is not repeated. It **MUST NOT** do so while the
+  earlier answer is out of the Brain's view: a note pointing at an answer the conversation no longer
+  carries tells the model to use what it cannot see (§6.2).
+- The exchange a replay produces **MUST** be marked `replayed` (§3.2).
+
 **The scope of run-once, stated because it is where implementers assume more than is offered.** The
 key is derived from the run, so the guarantee has a boundary, and the boundary has three cases:
 
 - **Within a run — protected.** A retry, or a Brain re-proposing the same act, derives the same key
-  and is replayed rather than performed.
+  and is replayed rather than performed. The one exception is a look after a change, above: it is
+  not the same act.
 - **Across an interrupted run, resumed in the same session — protected**, by run continuity
   (§4.11). The resumed run keeps the interrupted run's identity, so the key still matches.
 - **Across a *completed* run — NOT protected, and MUST NOT be.** A later run proposing an identical
@@ -915,6 +997,24 @@ clock.
 > vectors `budget-bounds-tokens-on-any-protocol` and `budget-bounds-cost-on-any-protocol` now
 > certify this requirement, and both were proven able to fail against the old behaviour.
 
+**Repetition.** An implementation offering run-once **MAY** bound how many times a run may ask for
+an act the ledger has already answered.
+
+- The bound **MUST** count replays only (§3.2): the act that ran, plus each replay of the same tool
+  with the same arguments. A read after an edit is not a replay (§4.9), and a bound that counted
+  identical asks instead stopped every run that read a file, changed it and read it back.
+- It **MUST** be checked between turns, like a budget, and **MUST** stop the loop when reached.
+- The stop **MUST** be reported as a failure with the code `going_in_circles` (§3.6), with status
+  `Failed`: it is not a refusal and not an answer.
+- An implementation that offers the bound **SHOULD** let a composition set it and **SHOULD** default
+  it above `MAX_TURNS`, so a composition that never set it is bounded by the turn cap exactly as it
+  was before.
+
+**Reporting a stop.** An implementation offering §3.6 **MUST** report a cancellation, an exhausted
+budget, an exhausted turn cap and the repetition bound each with its own code, beside the status
+§4.10 and §5 already require. The status says a run did not answer; the code says which of the four
+stopped it.
+
 **Degradation before failure.** An implementation **MAY** track a provider's health and stop
 calling one that is failing.
 
@@ -923,6 +1023,12 @@ calling one that is failing.
 - An implementation with no alternative configured **MUST** fail rather than pretend: silently
   returning an empty or fabricated result is worse than an error, because the caller cannot tell.
 - Health tracking **MUST NOT** change any verdict or result while the primary is healthy.
+- A provider that did not answer at all (a refused connection, a name that resolves to nothing, a
+  request that never left the machine) **MUST** be reported as unreachable. It **MUST NOT** be
+  reported as an internal fault to take to support: the person's next step is the address and
+  whatever should be listening at it. The report **SHOULD** name where the implementation tried
+  when the layer that failed knows it, and the native fault **SHOULD** be kept beside it for
+  whoever investigates.
 
 **Guardian efficiency.** Screening the same unchanged input on every turn is waste, not safety.
 
@@ -1404,6 +1510,22 @@ than as prose does not widen what the Brain may reach for.
   the request's own exchange list is *this* turn's in-flight work and **MUST NOT** carry a past
   turn's calls; those travel on the turn (§3.2).
 
+**Trimming the conversation (MAY).** A run that reads files in pages carries more than a provider's
+window will hold. An implementation **MAY** send an older call's result as a short marker instead of
+the result itself, keeping only the most recent calls whole.
+
+- A trimmed call **MUST** keep its request and its answer message, with only the answer's content
+  replaced, so attribution still holds: the model still knows the act happened and what it asked for.
+- How many recent calls stay whole **SHOULD** be the composition's to set. A chat needs few; an
+  agent that reads files in pages needs the pages it is working on in view at once.
+- A replay kept whole **MUST** keep the call it stands for whole too, for as long as the replay is
+  in view (§4.9). Watched in the reference TypeScript implementation: a file read in pages pushed its
+  first page out, the model asked for it again, the note said the answer was above, and above was a
+  marker. The model read the same file forty more times.
+- An implementation **MAY** trim further before sending when the conversation plainly will not fit,
+  and **SHOULD** trim further and try again when the provider refuses a request as too large, rather
+  than failing the turn. The current prompt **MUST NOT** be trimmed.
+
 **One act per turn.** A provider may return several calls at once. Direction performs acts one at a
 time, because authorization, approval and run-once are judgments about a *single* act (§4.9). An
 implementation **MAY** carry the remainder forward, and **SHOULD** rely on the model re-proposing
@@ -1615,6 +1737,12 @@ in whole, belongs to a specialist. Rules (MUST, for an implementation offering t
       same session, and an identical act proposed in a later *completed* run performs again — the
       boundary is stated rather than left to be assumed, and callers whose delivery may repeat are
       told they must deduplicate at the trigger (§4.9, §4.11)
+- [ ] **Full (optional):** a `Safe` look at a scope this run has since written to runs again rather
+      than replaying the answer from before the write, on every protocol; an act that is not `Safe`
+      keeps its key exactly (§4.9)
+- [ ] **Full (optional):** a replay reaches the Brain whole with a note saying it already ran; a
+      note-only answer is never given while the answer it points to is out of view; a replay's
+      exchange is marked `replayed` (§3.2, §4.9)
 - [ ] **Full (optional):** a Pending approval stops the turn with AwaitingApproval and executes
       nothing; a denial is non-terminal and carries its reason (§3.1, §4.9)
 - [ ] **Full (optional):** untrusted inbound text is screened by the Gate before it reaches
@@ -1636,8 +1764,13 @@ in whole, belongs to a specialist. Rules (MUST, for an implementation offering t
       usage where there is any and a local count where there is none, bounds the run on **every**
       protocol rather than only the ones that volunteer their numbers, marks which of the two a
       number was, and reports exhaustion distinguishably from a refusal (§3.4, §4.10)
+- [ ] **Full (optional):** a repetition bound counts replays only, stops the loop between turns, and
+      reports `going_in_circles`; a cancellation, an exhausted budget and an exhausted turn cap each
+      report their own failure code beside their status (§3.6, §4.10)
 - [ ] **Full (optional):** an unhealthy provider degrades to a configured alternative rather than
-      failing, and an implementation with no alternative fails rather than fabricates (§4.10)
+      failing, and an implementation with no alternative fails rather than fabricates; a provider
+      that did not answer at all is reported as unreachable, never as a fault to take to support
+      (§4.10)
 - [ ] Retrieval ranks by relevance and returns the best rather than the first found; a natural
       question retrieves the passage that answers it (§4.2)
 - [ ] **Full (optional):** what Recall injects is bounded across skills, memories and knowledge
@@ -1648,6 +1781,9 @@ in whole, belongs to a specialist. Rules (MUST, for an implementation offering t
       assistant's request with its call id and a Tool message answering that id; every call is
       answered, denials and withheld results included; the text protocol still works and every
       control behaves identically on both (§6.2)
+- [ ] **Full (optional):** a trimmed conversation keeps every call's request and answer message,
+      keeps a replay's original whole while the replay is in view, and never trims the current
+      prompt (§6.2)
 - [ ] **Full (optional):** boundary redaction hides configured values from **every** model —
       Brain, Gate and Judge alike — and rehydrates the reply; none sees them in the clear (§4.6)
 - [ ] **Full (optional):** a tool allow-list denies disallowed tools at Direction before

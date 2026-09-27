@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.14**
+**Version 1.15**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -168,6 +168,14 @@ run going in circles, and §3.6 gives every stop without an answer a code, so a 
 sentence. §6.2 describes trimming a long conversation, which the TypeScript implementation has done
 since before this version and which this document never mentioned. And §4.10 says a provider that
 did not answer at all is unreachable at an address, not a fault to take to support.
+
+**Version 1.15** says what a run has spent while it is spending it. Every implementation already
+counted a run's tokens, reported or estimated, because the budget in §4.10 cannot bound what it
+does not count; the count stayed inside the loop, and the only thing a watching person could read
+was a clock. A local model that thinks for four minutes and a paid one that spends forty thousand
+tokens looked the same until each ended. §4.14.1 puts the count the budget reads on the stream,
+after every model call, as a running total marked estimated or reported the way §3.4 already
+requires. Nothing about the count changed; it is now said out loud.
 
 ---
 
@@ -1277,6 +1285,32 @@ Requirements (**MUST**, for an implementation claiming this capability):
 An implementation that offers only a batched loop, or only a streamed loop, is unaffected by
 this section.
 
+#### 4.14.1 Usage, as it is spent (Full, OPTIONAL capability)
+
+A budget (§4.10) is the loop reading what a run has spent. The person watching the run is owed
+the same reading, and while the run is going: a turn that thinks for four minutes on a local model
+and a turn that spends forty thousand tokens on a paid one look the same from outside until they
+end, and a count that arrives only with the outcome arrives after the moment somebody could have
+stopped the run.
+
+Requirements (**MUST**, for an implementation that yields a run's events and accounts usage per
+§3.4):
+
+- After every model call the loop makes for the Brain, the event stream carries a **usage event**
+  whose record (§3.4) is the run's usage **so far**: `promptTokens` and `completionTokens` summed
+  across every call of this run, and `isEstimated` true when any of those calls was estimated. A
+  running total rather than the last call's figure, so a consumer that missed one event still
+  reads the right number from the next.
+- The total is the count the budget bounds (§4.10). An implementation **MUST NOT** keep a second
+  count for the stream: two counts of one run can disagree, and the one on the screen is the one
+  somebody trusts.
+- Every call counts, a call whose draft was sent back for revision (§4.2) included. It was spent.
+- The event's text is the running total, `promptTokens + completionTokens`, as a decimal integer,
+  so a consumer that reads only the text still reads the number.
+- A usage event is neither an answer nor narration. It **MUST NOT** be concatenated into the
+  result (§4.14) and **MUST NOT** enter the observations or the session history (§4.11).
+- It is emitted identically on every door that yields events (§7.6, Invariant 6).
+
 ### 4.15 Selection (Full, OPTIONAL capability)
 
 What an agent **carries** and what a run is **offered** are different things, and an
@@ -1764,6 +1798,9 @@ in whole, belongs to a specialist. Rules (MUST, for an implementation offering t
       usage where there is any and a local count where there is none, bounds the run on **every**
       protocol rather than only the ones that volunteer their numbers, marks which of the two a
       number was, and reports exhaustion distinguishably from a refusal (§3.4, §4.10)
+- [ ] **Full (optional):** a run that yields its events carries a usage event after every model
+      call: the run's running total, the same count the budget bounds, marked estimated when any
+      call was, never part of the answer (§3.4, §4.14.1)
 - [ ] **Full (optional):** a repetition bound counts replays only, stops the loop between turns, and
       reports `going_in_circles`; a cancellation, an exhausted budget and an exhausted turn cap each
       report their own failure code beside their status (§3.6, §4.10)

@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.16**
+**Version 1.17**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -184,6 +184,15 @@ into a tool call's arguments arrived in pieces nobody counted until the last one
 permits **spending events** between sending a call and its usage event: the run's total so far
 plus this call's estimate, always marked estimated, a separate kind from the usage event, and
 never what the budget bounds. Optional, and invisible to a consumer that reads only usage events.
+
+**Version 1.17** says what a remote tool server is. §4.8 let tools be reached by address and said
+nothing about what speaks at that address, so the reference implementation conformed while every
+server built with the protocol's own SDKs refused it: it posted plain JSON-RPC, and the servers
+require a client that reads event streams, opens a session and carries it. It conformed, and it
+could reach almost nothing. §4.8 now says that a built-in remote tool client **MUST** speak the
+protocol's published transports, not a private dialect of it, and that a server started as a
+process is as much data as one reached by URL. §4.1's `McpBroker` gains the catalog call
+(`listTools`) that §4.8's routing already depended on and no interface named.
 
 ---
 
@@ -471,7 +480,7 @@ interface ClassifierBroker { classify(systemPrompt: Text, input: Text) -> Async<
 interface GeneratorBroker  { generate(systemPrompt: Text, userPrompt: Text) -> Async<Text> }
 interface VerifierBroker   { verify(systemPrompt: Text, task: Text, candidate: Text) -> Async<Text> }   // a verdict: a 0.0–1.0 score and a short reason
 interface ToolBroker       { has(name: Text) -> Bool;  run(name: Text, input: Text) -> Async<Text> }
-interface McpBroker        { call(name: Text, input: Text) -> Async<Text> }
+interface McpBroker        { call(name: Text, input: Text) -> Async<Text>;  listTools() -> Async<List<RemoteTool>> }
 interface LogBroker        { reset() -> Async<Void>;  write(line: Text) -> Async<Void> }   // support broker
 interface AuditBroker      { write(record: AuditRecord) -> Async<Void> }                   // support broker, OPTIONAL (§4.7)
 interface PolicyBroker     { authorize(effect: AgentEffect) -> Async<AuthorizationDecision> }  // support broker, OPTIONAL (§4.9)
@@ -479,6 +488,9 @@ interface ApprovalBroker   { request(effect: AgentEffect) -> Async<ApprovalDecis
 interface ResilienceBroker { execute<T>(operation: () -> Async<T>) -> Async<T> }               // support broker, OPTIONAL (§4.10)
 interface SessionBroker    { selectSession(id: Text) -> Async<Session?>;  upsertSession(s: Session) -> Async<Void> }  // OPTIONAL (§4.11)
 ```
+
+`RemoteTool` is `{ name: Text, description: Text, inputSchema: Text }` — a server's own account
+of what it holds, which is what routing across several servers routes by (§4.8).
 
 `AuthorizationDecision` is `{ permitted: Bool, reason: Text }` and `ApprovalDecision` is
 `enum { Approved, Denied, Pending }`. A decision **MUST** carry its reason: a denial with no
@@ -785,7 +797,7 @@ document can define an agent without authoring code. An implementation offering 
   Custom function, an External broker instance — is outside the document, and the implementation
   **MUST** allow code to compose alongside the document rather than forcing a choice between them.
   External tools reached by address (§4.2's remote tools) **MAY** appear in the document, because
-  an address is data.
+  an address is data — and so is the command that starts a remote tool server as a process.
 - **SHOULD** keep the document surface mechanically checkable against the capability surface, the
   same way the three modes are — a capability added to the code surface and absent from the
   document surface is the same invisible erosion §4.8 exists to prevent.
@@ -801,6 +813,33 @@ wherever the code surface accumulates. A capability the implementation deliberat
 singular **MUST** document why — the same rule as an omitted mode, and for the same reason:
 silence is not a decision, it is a defect a host discovers by losing a source it believed it
 had.
+
+**Remote tool servers speak the protocol, not a dialect of it.** Where an implementation ships its
+own client for remote tool servers — the Model Context Protocol, reached by address or started as
+a process — that client is the only way most hosts will ever reach one, so a client that reaches
+only servers written for it is a capability that exists on paper. A built-in client:
+
+- **MUST** speak the protocol's published transports as the protocol defines them. Over HTTP that
+  means accepting a reply as JSON or as an event stream, opening the session with the protocol's
+  lifecycle before the first request, and carrying the session the server issued on every request
+  after it; a session the server has ended **SHOULD** be renewed rather than surfaced as a failure.
+  Over a process's standard streams it means one message per line, and answering the requests the
+  server itself sends (a liveness ping at the least) rather than mistaking them for its answer.
+- **SHOULD** keep reaching a server older than the lifecycle — one that refuses it as an unknown
+  method — rather than failing a server that answers everything else.
+- **MUST** read a server's whole catalog, following its pagination: a catalog read to its first
+  page shows the agent some of the server's tools and gives no sign that the rest exist.
+- **MUST NOT** silently drop what a tool returns. Content the brain cannot read as text **MUST**
+  reach it as at least a marker of what came back; an empty result where the tool answered is a
+  false observation.
+- **MUST** surface a failure of the remote server — refused, unreachable, ended mid-answer, or a
+  protocol error — through the same categorized path as any other dependency failure (§4.2),
+  whichever transport carried it.
+
+Transports are below the broker contract (§4.1), so the conformance vectors, which script the
+server behind `McpBroker`, cannot observe them; an implementation **SHOULD** prove them with tests
+that run its real client against a server speaking the real wire, and **SHOULD** prove them once
+against a server built with the protocol's own SDK, which is the server its hosts will meet.
 
 **The fleet.** Other agents are a capability like any other, and an implementation offering
 multi-agent flows **SHOULD** offer them the same three ways: a **Local** registry (a folder of
@@ -1869,6 +1908,11 @@ in whole, belongs to a specialist. Rules (MUST, for an implementation offering t
 - [ ] Integrations accumulate — a second tool, remote tool server, or skill source adds, never
       silently replaces; routing across several is deterministic and stated; a deliberately
       singular capability documents why (§4.8)
+- [ ] A built-in remote tool client speaks the protocol's published transports — over HTTP, JSON
+      or event-stream replies, the lifecycle before the first request, the session carried; over
+      a process, one message per line with the server's own requests answered — reads the whole
+      paginated catalog, drops nothing a tool returns, and surfaces a server failure through the
+      categorized dependency path (§4.1, §4.8)
 - [ ] **Full (optional):** the fleet — registered agents materialize as tools; a handoff is an
       act the perimeter governs; the default handoff is grounded (the task plus the user's
       original ask) and template-configurable; identity rides in the composition document, and a

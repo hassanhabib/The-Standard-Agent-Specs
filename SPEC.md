@@ -1,5 +1,5 @@
 # The Standard for Agents — Specification
-**Version 1.17**
+**Version 1.18**
 
 A **normative, language-neutral** blueprint for building a Tri-Nature agent framework
 in any language (JavaScript, .NET, Go, Rust, Python, …). The reference implementation
@@ -194,6 +194,18 @@ protocol's published transports, not a private dialect of it, and that a server 
 process is as much data as one reached by URL. §4.1's `McpBroker` gains the catalog call
 (`listTools`) that §4.8's routing already depended on and no interface named.
 
+**Version 1.18** lets an answer say where it came from. §4.1's `KnowledgeBroker` returned passages
+and nothing else, so a source had no way to tell the agent which document a passage was cut from or
+how well it matched, and an agent that wanted to credit its sources had one option: bake the title
+into the passage and hope the model repeated it. Models do not, reliably — a bank's policy bot, a
+helpdesk answering from runbooks and a coding agent answering from API references all need the
+citation to be a fact, not a request. §3.7 adds `KnowledgeResult` (the passage, its score, its
+source); §4.1 adds an optional `SourcedKnowledgeBroker` beside the unchanged one, which is lifted to
+an unsourced result so every existing broker keeps working; §3.2's context carries the sources the
+run recalled; and §4.2 adds **citation**: opt-in, off by default, appended by the implementation
+after the Judge to a run that answered, never to one that did not. It claims what the
+implementation can know — that a source was recalled into the run — and nothing more.
+
 ---
 
 ## 1. Conformance
@@ -282,6 +294,7 @@ record AgentContext {
   history       : List<Turn>    // DATA:      what was said before, oldest first (§4.11)
   systemPrompt  : Text          // DATA:      written by Recall
   observations  : List<Text>    // DATA:      written by Recall / Act
+  groundingSources : List<Text> // DATA:   written by Recall — the knowledge sources this run recalled (§4.2)
   intent        : Text          // DECISION:  written by Think
   directionType : Text          // DECISION:  written by Think
   payload       : Text          // DECISION:  written by Think
@@ -309,6 +322,9 @@ record Exchange {
   **MUST** default to false, so an exchange recorded before this field existed reads as a call that
   ran. A loop that counts a run's repeated asks (§4.10) has to tell the two apart: a read after an
   edit is the same ask and is not a repeat.
+- `groundingSources` **MUST** hold each non-empty `source` (§3.7) of the knowledge Recall injected
+  into this run, once, in the order first recalled, and **MUST** default to empty. It belongs to the
+  run (§4.4): a source one run recalled **MUST NOT** appear in another's.
 - Context updates **MUST** be copy-on-write: a nature returns an updated copy; a nature
   **MUST NOT** mutate a shared instance. (Use records/immutable structs; if unavailable,
   a copy helper or builder.)
@@ -457,6 +473,28 @@ record Failure {
 - A run that answered, asked, refused or is waiting for approval **MUST NOT** carry a failure: none
   of those is a stop without an answer.
 
+### 3.7 KnowledgeResult (OPTIONAL capability — §4.2)
+
+A passage, with where it came from and how well it matched.
+
+```
+record KnowledgeResult {
+  text   : Text      // the passage — exactly what an unsourced broker returns
+  score  : Number?   // relevance as the source computed it; absent when the source does not score
+  source : Text      // where the passage came from: a title, a path, a URL; empty when unknown
+}
+```
+
+- `source` **MUST** be a human-readable identity a reader can follow back to the material — the
+  title of the policy, the path of the runbook, the address of the page — because it is what a
+  citation shows a person (§4.2). An empty `source` means the passage's origin is unknown, and such
+  a passage **MUST NOT** be cited.
+- `score` is comparable **only within one source**. Lexical scores, full-text ranks and vector
+  distances are different scales, and an implementation **MUST NOT** rank one source's results
+  against another's by `score` alone.
+- `text` **MUST** be what the Brain is shown. A source and a score travel beside the passage; they
+  **MUST NOT** change the observation an unsourced broker would have produced for the same text.
+
 ---
 
 ## 4. Component Contracts
@@ -476,6 +514,7 @@ A broker is a liaison to **exactly one** external resource. A broker:
 interface SkillBroker      { selectSkills() -> Async<List<Skill>> }
 interface MemoryBroker     { selectMemories() -> Async<List<Text>>;  insertMemory(m: Text) -> Async<Void> }
 interface KnowledgeBroker  { selectKnowledge(query: Text) -> Async<List<Text>> }
+interface SourcedKnowledgeBroker { selectSourcedKnowledge(query: Text) -> Async<List<KnowledgeResult>> }  // OPTIONAL (§3.7)
 interface ClassifierBroker { classify(systemPrompt: Text, input: Text) -> Async<Text> }
 interface GeneratorBroker  { generate(systemPrompt: Text, userPrompt: Text) -> Async<Text> }
 interface VerifierBroker   { verify(systemPrompt: Text, task: Text, candidate: Text) -> Async<Text> }   // a verdict: a 0.0–1.0 score and a short reason
@@ -491,6 +530,12 @@ interface SessionBroker    { selectSession(id: Text) -> Async<Session?>;  upsert
 
 `RemoteTool` is `{ name: Text, description: Text, inputSchema: Text }` — a server's own account
 of what it holds, which is what routing across several servers routes by (§4.8).
+
+A knowledge source implements **either** `KnowledgeBroker` or `SourcedKnowledgeBroker`. The sourced
+contract is the richer one and the plain one is never retired: a `KnowledgeBroker` **MUST** keep
+working unchanged, and an implementation **MUST** lift each `Text` it returns into
+`{ text, score: absent, source: "" }` — a passage with no known origin, which is exactly what it
+always was.
 
 `AuthorizationDecision` is `{ permitted: Bool, reason: Text }` and `ApprovalDecision` is
 `enum { Approved, Denied, Pending }`. A decision **MUST** carry its reason: a denial with no
@@ -509,7 +554,8 @@ A foundation wraps one broker, returns **primitives**, and speaks business langu
 ```
 interface SkillService        { retrieveSkills(route: Text) -> Async<Text>;  retrieveSkillCatalog() -> Async<Text> }
 interface MemoryService       { recallMemories() -> Async<List<Text>>;  remember(m: Text) -> Async<Void> }
-interface KnowledgeService    { retrieveKnowledge(query: Text) -> Async<List<Text>> }
+interface KnowledgeService    { retrieveKnowledge(query: Text) -> Async<List<Text>>;
+                                retrieveSourcedKnowledge(query: Text) -> Async<List<KnowledgeResult>> }  // the second OPTIONAL (§3.7)
 interface GateService         { screen(gatePrompt: Text, input: Text) -> Async<Text> }
 interface BrainService        { generate(systemPrompt: Text, userPrompt: Text) -> Async<Text> }
 interface JudgeService        { evaluate(judgePrompt: Text, task: Text, candidate: Text) -> Async<Judgement> }
@@ -557,6 +603,41 @@ stripping that metadata from `content`.
   every prompt cost whatever has accumulated, which is a bill that grows on its own.
 - Memory **MAY** be filtered by relevance and age. Forgetting is a feature: a memory store that
   only grows eventually poisons every prompt it is injected into.
+
+**Retrieval may say where a passage came from (Full, OPTIONAL).** `retrieveSourcedKnowledge`
+returns the same passages in the same order as `retrieveKnowledge`, each as a `KnowledgeResult`
+(§3.7). An implementation's own Local knowledge mode — the one reading a folder — **SHOULD**
+populate `source` with the document's path relative to that folder and `score` with the score it
+ranked by, so the knowledge an agent is given with nothing installed is citable out of the box.
+
+**A grounded answer cites its sources (Full, OPTIONAL capability).** An implementation **MAY** offer
+citation. When it does:
+
+- Citation **MUST** be opt-in and **MUST** be off by default. An agent that never asked for it
+  returns the answer it always returned, byte for byte.
+- It **MUST** be settable on the agent and **SHOULD** be settable per request, under the same
+  precedence every request field obeys: what the deployment configured wins, then what the request
+  asked for, then off. A deployment that must cite — a regulated answer — cannot be switched off by
+  a caller.
+- When a run ends **Responded**, the implementation **MUST** append, for each entry of the run's
+  `groundingSources` (§3.2) in order, one line made of a configurable prefix (default `Source: `)
+  followed by the source — after a blank line, and skipping a source whose line the answer already
+  carries. The model is not asked to cite; the implementation cites, because a citation the model
+  may or may not write is not a citation.
+- It **MUST** be applied **after** the Judge. The Judge scores the model's answer; lines the
+  implementation wrote are not the model's work, and a Judge that scores them is scoring the
+  implementation.
+- The cited answer **MUST** be *the* answer: what `processPrompt` returns, what the streamed
+  outcome's response carries (§4.14), and what the session records as the turn's answer (§4.11) are
+  the same text. A citation that appears on one door and not another is a citation a caller cannot
+  rely on.
+- A run that ended **Refused**, **AwaitingInput**, **AwaitingApproval** or **Failed** **MUST NOT**
+  be cited: a run that did not answer has nothing to credit.
+- An answer held to a response schema (§4.13) **MUST NOT** be cited. It is a document the caller
+  will parse, and a line appended after it breaks the very shape the caller was promised; an
+  implementation **MAY** report the sources beside such an answer instead, never inside it.
+- A citation **MUST** claim only what the implementation knows: that the source was recalled into
+  the run. It **MUST NOT** be described to a caller as proof the model relied on that source.
 
 `retrieveSkills(route)` composes the applicable skills' bodies into the `systemPrompt`. When `route`
 is non-empty (from the Gate's `route` verdict, §4.3) it selects the matching skill(s) by `name`, so a
@@ -1877,6 +1958,14 @@ in whole, belongs to a specialist. Rules (MUST, for an implementation offering t
       question retrieves the passage that answers it (§4.2)
 - [ ] **Full (optional):** what Recall injects is bounded across skills, memories and knowledge
       together, keeping the highest-ranked content; memory may be filtered by relevance and age (§4.2)
+- [ ] **Full (optional):** a knowledge source may return passages with a score and a source; a plain
+      knowledge broker keeps working and is lifted to unsourced results; the run's context carries
+      the sources it recalled, once each, and no other run's (§3.2, §3.7, §4.1)
+- [ ] **Full (optional):** citation is opt-in and off by default; a configured setting wins over a
+      request's; a run that answered ends with one line per recalled source not already credited,
+      appended after the Judge and identical on every door and in the session; a run that did not
+      answer, an answer held to a response schema, and a passage with no source are never cited
+      (§4.2)
 - [ ] **Full:** structured tool-calls — tools advertise name/description/parameters; `TOOL:`
       calls parsed from the first line; malformed calls recover, not crash (§6.1)
 - [ ] **Full (optional):** provider-native tool-calls round-trip — the next generation carries the
